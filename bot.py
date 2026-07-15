@@ -364,6 +364,24 @@ def normalize(text: str) -> str:
     return f"@{t}" if t else ""
 
 
+def parse_chat_ref(text: str) -> str | int | None:
+    """
+    ورودی چت را برای get_chat آماده می‌کند. قبول می‌کند:
+      @username
+      username
+      t.me/username
+      https://t.me/username
+      آیدی عددی (مثل -1001234567890) ← برای گروه/چنل خصوصی بدون یوزرنیم
+    """
+    t = text.strip()
+    if t.lstrip("-").isdigit():
+        return int(t)
+    username = normalize(t)
+    if not username or username == "@":
+        return None
+    return username
+
+
 NAV_KEYWORDS = ("شروع", "توقف", "تنظیم", "وضعیت", "بازگشت", "مسیر", "ادمین")
 
 # ════════════════════════════════════════════════
@@ -549,8 +567,8 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         ctx.user_data["new_rule"] = {}
         await q.edit_message_text(
             "📥 *مرحله ۱ از ۲ — منبع*\n\n"
-            "یوزرنیم گروه یا چنلِ *منبع* را ارسال کن (ربات باید عضو آن باشد)\n\n"
-            "فرمت‌های قابل‌قبول:\n`@username`\n`t.me/username`\n\n"
+            "یوزرنیم یا آیدی عددیِ گروه/چنلِ *منبع* را ارسال کن (ربات باید عضو آن باشد)\n\n"
+            "فرمت‌های قابل‌قبول:\n`@username`\n`t.me/username`\n`-1001234567890` (آیدی عددی — برای چت‌های خصوصی بدون یوزرنیم)\n\n"
             "برای انصراف /cancel بزن",
             parse_mode="Markdown",
         )
@@ -697,20 +715,20 @@ async def recv_add_src(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if info is None:
         return ConversationHandler.END
 
-    username = normalize(update.message.text)
-    if not username or username == "@":
+    ref = parse_chat_ref(update.message.text)
+    if ref is None:
         await update.message.reply_text(
-            "❌ یوزرنیم نامعتبر است\n\nمثال: `@mygroup` یا `t.me/mygroup`\n\nدوباره ارسال کن یا /cancel بزن",
+            "❌ ورودی نامعتبر است\n\nمثال: `@mygroup`، `t.me/mygroup` یا آیدی عددی `-1001234567890`\n\nدوباره ارسال کن یا /cancel بزن",
             parse_mode="Markdown",
         )
         return ST_ADD_SRC
 
     try:
-        chat = await ctx.bot.get_chat(username)
+        chat = await ctx.bot.get_chat(ref)
     except Exception as e:
-        log.warning("get_chat failed for %r: %s", username, e)
+        log.warning("get_chat failed for %r: %s", ref, e)
         await update.message.reply_text(
-            "❌ چت پیدا نشد!\n\n• یوزرنیم را چک کن\n• مطمئن شو ربات عضو آن است\n\nدوباره ارسال کن یا /cancel بزن"
+            "❌ چت پیدا نشد!\n\n• یوزرنیم/آیدی را چک کن\n• مطمئن شو ربات عضو آن است\n\nدوباره ارسال کن یا /cancel بزن"
         )
         return ST_ADD_SRC
 
@@ -723,15 +741,15 @@ async def recv_add_src(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         await ctx.bot.get_chat_member(chat.id, ctx.bot.id)
     except Exception:
         await update.message.reply_text(
-            "❌ ربات عضو این چت نیست!\n\n۱. ربات را به این چت اضافه کن\n۲. دوباره یوزرنیم را ارسال کن"
+            "❌ ربات عضو این چت نیست!\n\n۱. ربات را به این چت اضافه کن\n۲. دوباره ارسال کن"
         )
         return ST_ADD_SRC
 
-    ctx.user_data["new_rule"] = {"source_id": chat.id, "source_title": chat.title or username, "source_kind": kind}
+    ctx.user_data["new_rule"] = {"source_id": chat.id, "source_title": chat.title or str(ref), "source_kind": kind}
     await update.message.reply_text(
         f"✅ منبع «*{chat.title}*» ثبت شد\n\n"
         "📤 *مرحله ۲ از ۲ — مقصد*\n\n"
-        "یوزرنیم گروه یا چنلِ *مقصد* را ارسال کن\n"
+        "یوزرنیم یا آیدی عددیِ گروه/چنلِ *مقصد* را ارسال کن\n"
         "(اگر مقصد چنل است، ربات باید ادمین آن باشد)\n\n"
         "برای انصراف /cancel بزن",
         parse_mode="Markdown",
@@ -753,20 +771,20 @@ async def recv_add_tgt(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text("⚠️ چیزی اشتباه شد، دوباره /start بزن")
         return ConversationHandler.END
 
-    username = normalize(update.message.text)
-    if not username or username == "@":
+    ref = parse_chat_ref(update.message.text)
+    if ref is None:
         await update.message.reply_text(
-            "❌ یوزرنیم نامعتبر است\n\nمثال: `@mychannel` یا `t.me/mychannel`\n\nدوباره ارسال کن یا /cancel بزن",
+            "❌ ورودی نامعتبر است\n\nمثال: `@mychannel`، `t.me/mychannel` یا آیدی عددی `-1001234567890`\n\nدوباره ارسال کن یا /cancel بزن",
             parse_mode="Markdown",
         )
         return ST_ADD_TGT
 
     try:
-        chat = await ctx.bot.get_chat(username)
+        chat = await ctx.bot.get_chat(ref)
     except Exception as e:
-        log.warning("get_chat failed for %r: %s", username, e)
+        log.warning("get_chat failed for %r: %s", ref, e)
         await update.message.reply_text(
-            "❌ چت پیدا نشد!\n\n• یوزرنیم را چک کن\n• مطمئن شو ربات عضو/ادمین آن است\n\nدوباره ارسال کن یا /cancel بزن"
+            "❌ چت پیدا نشد!\n\n• یوزرنیم/آیدی را چک کن\n• مطمئن شو ربات عضو/ادمین آن است\n\nدوباره ارسال کن یا /cancel بزن"
         )
         return ST_ADD_TGT
 
@@ -813,7 +831,7 @@ async def recv_add_tgt(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
     rule_id = add_rule(
         source_id=new_rule["source_id"], source_title=new_rule["source_title"], source_kind=new_rule["source_kind"],
-        target_id=chat.id, target_title=chat.title or username, target_kind=tgt_kind,
+        target_id=chat.id, target_title=chat.title or str(ref), target_kind=tgt_kind,
         direction=direction, created_by=uid,
     )
     ctx.user_data.pop("new_rule", None)
