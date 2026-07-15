@@ -1,14 +1,18 @@
 """
 ╔══════════════════════════════════════════════════╗
-║         ربات فورواردر دوطرفه  🤖                ║
+║      ربات فورواردر چندمسیره (نامحدود) 🤖         ║
 ║  python-telegram-bot 22.7+  |  Python 3.14+      ║
 ║  حالت اجرا: Webhook (مخصوص Render Web Service)   ║
 ╚══════════════════════════════════════════════════╝
 
 متغیرهای محیطی اجباری (در Render تنظیم کنید):
   BOT_TOKEN     ← توکن از @BotFather
-  ADMINS        ← آیدی عددی ادمین‌ها (با کاما جدا کنید اگر چند نفرند)
+  ADMINS        ← آیدی عددی مالکان اصلی ربات (با کاما جدا کنید اگر چند نفرند)
   WEBHOOK_URL   ← آدرس سرویس Render شما (مثل https://my-bot.onrender.com)
+
+نکته: افرادی که در ADMINS قرار می‌گیرند «مالک» ربات هستند و همیشه دسترسی کامل
+دارند. مالک‌ها می‌توانند از داخل ربات ادمین‌های دیگر اضافه کنند و برای هرکدام
+دسترسی دلخواه (مثلاً فقط فوروارد گروه‌به‌گروه) تعیین کنند.
 """
 
 from __future__ import annotations
@@ -18,13 +22,11 @@ import os
 import sqlite3
 import sys
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    KeyboardButton,
-    ReplyKeyboardMarkup,
     Update,
 )
 from telegram.ext import (
@@ -53,9 +55,9 @@ log = logging.getLogger(__name__)
 
 BOT_TOKEN: str = os.environ.get("BOT_TOKEN", "").strip()
 
-_admins_raw = os.environ.get("ADMINS", "").strip()
-ADMINS: list[int] = [
-    int(part) for part in _admins_raw.split(",") if part.strip().lstrip("-").isdigit()
+_owners_raw = os.environ.get("ADMINS", "").strip()
+OWNERS: list[int] = [
+    int(part) for part in _owners_raw.split(",") if part.strip().lstrip("-").isdigit()
 ]
 
 WEBHOOK_URL: str = os.environ.get("WEBHOOK_URL", "").strip().rstrip("/")
@@ -68,7 +70,7 @@ DB_PATH: str = "settings.db"
 if not BOT_TOKEN:
     log.critical("متغیر محیطی BOT_TOKEN تنظیم نشده است.")
     sys.exit(1)
-if not ADMINS:
+if not OWNERS:
     log.critical("متغیر محیطی ADMINS تنظیم نشده یا نامعتبر است.")
     sys.exit(1)
 if not WEBHOOK_URL:
@@ -80,30 +82,78 @@ if not WEBHOOK_URL:
 # ════════════════════════════════════════════════
 
 (
-    ST_MENU,        # انتخاب حالت فورواد
-    ST_PANEL,       # پنل مدیریت
-    ST_SRC,         # انتظار یوزرنیم منبع
-    ST_TGT,         # انتظار یوزرنیم مقصد
+    ST_MAIN,        # منوی اصلی / همه‌ی ناوبری با دکمه (callback)
+    ST_ADD_SRC,     # انتظار یوزرنیم منبع مسیر جدید
+    ST_ADD_TGT,     # انتظار یوزرنیم مقصد مسیر جدید
+    ST_ADMIN_ADD,   # انتظار آیدی عددی ادمین جدید
 ) = range(4)
+
+# ════════════════════════════════════════════════
+#  دسترسی‌ها (Permissions)
+# ════════════════════════════════════════════════
+
+# هر دسترسی مربوط به یک نوعِ مسیر فوروارد است، به‌علاوه‌ی مدیریت ادمین‌ها.
+ROUTE_PERMS: list[str] = ["gtc", "ctg", "gtg", "ctc"]
+ALL_PERMS: list[str] = ROUTE_PERMS + ["manage_admins"]
+
+PERM_LABELS: dict[str, str] = {
+    "gtc": "📤 فوروارد گروه → چنل",
+    "ctg": "📥 فوروارد چنل → گروه",
+    "gtg": "🔁 فوروارد گروه → گروه",
+    "ctc": "🔁 فوروارد چنل → چنل",
+    "manage_admins": "👥 مدیریت ادمین‌ها",
+}
+
+KIND_LABELS = {"group": "گروه/سوپرگروه", "channel": "چنل"}
+
+# ترکیب (نوعِ منبع، نوعِ مقصد) → کلید جهت
+DIRECTIONS: dict[tuple[str, str], str] = {
+    ("group", "channel"): "gtc",
+    ("channel", "group"): "ctg",
+    ("group", "group"): "gtg",
+    ("channel", "channel"): "ctc",
+}
+
+
+def kind_of(chat_type: str) -> str | None:
+    if chat_type in ("group", "supergroup"):
+        return "group"
+    if chat_type == "channel":
+        return "channel"
+    return None
+
 
 # ════════════════════════════════════════════════
 #  مدل داده
 # ════════════════════════════════════════════════
 
 @dataclass(slots=True, frozen=True)
-class Config:
-    mode:   str         # "gtc" = گروه→چنل  |  "ctg" = چنل→گروه
-    source: int | None
-    target: int | None
+class Rule:
+    id: int
+    source_id: int
+    source_title: str
+    source_kind: str
+    target_id: int
+    target_title: str
+    target_kind: str
+    direction: str
     active: bool
+    created_by: int | None
 
     @property
-    def ready(self) -> bool:
-        return self.source is not None and self.target is not None
+    def direction_label(self) -> str:
+        return PERM_LABELS.get(self.direction, self.direction)
 
-    @property
-    def mode_label(self) -> str:
-        return "گروه  →  چنل 📤" if self.mode == "gtc" else "چنل  →  گروه 📥"
+
+@dataclass(slots=True, frozen=True)
+class AdminInfo:
+    user_id: int
+    is_owner: bool
+    permissions: set[str] = field(default_factory=set)
+    added_by: int | None = None
+
+    def has(self, perm: str) -> bool:
+        return self.is_owner or perm in self.permissions
 
 # ════════════════════════════════════════════════
 #  دیتابیس (thread-safe)
@@ -116,43 +166,174 @@ def init_db() -> None:
     with _lock, sqlite3.connect(DB_PATH) as cx:
         cx.execute(
             """
-            CREATE TABLE IF NOT EXISTS configs (
-                id      INTEGER PRIMARY KEY AUTOINCREMENT,
-                mode    TEXT    NOT NULL UNIQUE,
-                source  INTEGER,
-                target  INTEGER,
-                active  INTEGER DEFAULT 0
+            CREATE TABLE IF NOT EXISTS admins (
+                user_id     INTEGER PRIMARY KEY,
+                is_owner    INTEGER DEFAULT 0,
+                permissions TEXT    DEFAULT '',
+                added_by    INTEGER
             )
             """
         )
-        for m in ("gtc", "ctg"):
+        cx.execute(
+            """
+            CREATE TABLE IF NOT EXISTS rules (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_id     INTEGER NOT NULL,
+                source_title  TEXT,
+                source_kind   TEXT NOT NULL,
+                target_id     INTEGER NOT NULL,
+                target_title  TEXT,
+                target_kind   TEXT NOT NULL,
+                direction     TEXT NOT NULL,
+                active        INTEGER DEFAULT 0,
+                created_by    INTEGER,
+                UNIQUE(source_id, target_id)
+            )
+            """
+        )
+        all_perms_csv = ",".join(ALL_PERMS)
+        for uid in OWNERS:
             cx.execute(
-                "INSERT OR IGNORE INTO configs (mode, source, target, active) VALUES (?,NULL,NULL,0)",
-                (m,),
+                "INSERT OR IGNORE INTO admins (user_id, is_owner, permissions, added_by) "
+                "VALUES (?, 1, ?, NULL)",
+                (uid, all_perms_csv),
+            )
+            # مالک‌های تعریف‌شده در ENV همیشه دسترسی کامل دارند، حتی اگر قبلاً
+            # به شکل دیگری در دیتابیس ثبت شده باشند.
+            cx.execute(
+                "UPDATE admins SET is_owner=1, permissions=? WHERE user_id=?",
+                (all_perms_csv, uid),
             )
         cx.commit()
 
+# ── ادمین‌ها ──────────────────────────────────────
 
-def db_get(mode: str) -> Config:
+def get_admin(uid: int) -> AdminInfo | None:
     with _lock, sqlite3.connect(DB_PATH) as cx:
         row = cx.execute(
-            "SELECT source, target, active FROM configs WHERE mode=?", (mode,)
+            "SELECT user_id, is_owner, permissions, added_by FROM admins WHERE user_id=?",
+            (uid,),
         ).fetchone()
-    if row:
-        return Config(mode=mode, source=row[0], target=row[1], active=bool(row[2]))
-    return Config(mode=mode, source=None, target=None, active=False)
+    if not row:
+        return None
+    perms = {p for p in row[2].split(",") if p}
+    return AdminInfo(user_id=row[0], is_owner=bool(row[1]), permissions=perms, added_by=row[3])
 
 
-def db_set(mode: str, field: str, value: int | None) -> None:
-    match field:
-        case "source" | "target" | "active":
-            pass
-        case _:
-            raise ValueError(f"Unknown field: {field!r}")
+def is_admin(uid: int) -> bool:
+    return get_admin(uid) is not None
+
+
+def has_perm(uid: int, perm: str) -> bool:
+    info = get_admin(uid)
+    return bool(info and info.has(perm))
+
+
+def list_admins() -> list[AdminInfo]:
+    with _lock, sqlite3.connect(DB_PATH) as cx:
+        rows = cx.execute(
+            "SELECT user_id, is_owner, permissions, added_by FROM admins "
+            "ORDER BY is_owner DESC, user_id ASC"
+        ).fetchall()
+    out = []
+    for r in rows:
+        perms = {p for p in r[2].split(",") if p}
+        out.append(AdminInfo(user_id=r[0], is_owner=bool(r[1]), permissions=perms, added_by=r[3]))
+    return out
+
+
+def add_admin(uid: int, added_by: int) -> None:
     with _lock, sqlite3.connect(DB_PATH) as cx:
         cx.execute(
-            f"UPDATE configs SET {field}=? WHERE mode=?", (value, mode)
+            "INSERT OR IGNORE INTO admins (user_id, is_owner, permissions, added_by) "
+            "VALUES (?, 0, '', ?)",
+            (uid, added_by),
         )
+        cx.commit()
+
+
+def remove_admin(uid: int) -> None:
+    with _lock, sqlite3.connect(DB_PATH) as cx:
+        cx.execute("DELETE FROM admins WHERE user_id=? AND is_owner=0", (uid,))
+        cx.commit()
+
+
+def toggle_admin_perm(uid: int, perm: str) -> None:
+    info = get_admin(uid)
+    if info is None or info.is_owner:
+        return
+    perms = set(info.permissions)
+    if perm in perms:
+        perms.discard(perm)
+    else:
+        perms.add(perm)
+    with _lock, sqlite3.connect(DB_PATH) as cx:
+        cx.execute(
+            "UPDATE admins SET permissions=? WHERE user_id=?",
+            (",".join(sorted(perms)), uid),
+        )
+        cx.commit()
+
+# ── مسیرهای فوروارد ───────────────────────────────
+
+def _row_to_rule(row) -> Rule:
+    return Rule(
+        id=row[0], source_id=row[1], source_title=row[2] or "—", source_kind=row[3],
+        target_id=row[4], target_title=row[5] or "—", target_kind=row[6],
+        direction=row[7], active=bool(row[8]), created_by=row[9],
+    )
+
+
+_RULE_COLS = "id, source_id, source_title, source_kind, target_id, target_title, target_kind, direction, active, created_by"
+
+
+def add_rule(source_id: int, source_title: str, source_kind: str,
+             target_id: int, target_title: str, target_kind: str,
+             direction: str, created_by: int) -> int | None:
+    try:
+        with _lock, sqlite3.connect(DB_PATH) as cx:
+            cur = cx.execute(
+                "INSERT INTO rules (source_id, source_title, source_kind, target_id, "
+                "target_title, target_kind, direction, active, created_by) "
+                "VALUES (?,?,?,?,?,?,?,0,?)",
+                (source_id, source_title, source_kind, target_id, target_title, target_kind,
+                 direction, created_by),
+            )
+            cx.commit()
+            return cur.lastrowid
+    except sqlite3.IntegrityError:
+        return None  # این مسیر از قبل وجود دارد
+
+
+def get_rule(rule_id: int) -> Rule | None:
+    with _lock, sqlite3.connect(DB_PATH) as cx:
+        row = cx.execute(f"SELECT {_RULE_COLS} FROM rules WHERE id=?", (rule_id,)).fetchone()
+    return _row_to_rule(row) if row else None
+
+
+def list_rules() -> list[Rule]:
+    with _lock, sqlite3.connect(DB_PATH) as cx:
+        rows = cx.execute(f"SELECT {_RULE_COLS} FROM rules ORDER BY id ASC").fetchall()
+    return [_row_to_rule(r) for r in rows]
+
+
+def rules_for_source(source_id: int) -> list[Rule]:
+    with _lock, sqlite3.connect(DB_PATH) as cx:
+        rows = cx.execute(
+            f"SELECT {_RULE_COLS} FROM rules WHERE active=1 AND source_id=?", (source_id,)
+        ).fetchall()
+    return [_row_to_rule(r) for r in rows]
+
+
+def set_rule_active(rule_id: int, active: bool) -> None:
+    with _lock, sqlite3.connect(DB_PATH) as cx:
+        cx.execute("UPDATE rules SET active=? WHERE id=?", (1 if active else 0, rule_id))
+        cx.commit()
+
+
+def delete_rule(rule_id: int) -> None:
+    with _lock, sqlite3.connect(DB_PATH) as cx:
+        cx.execute("DELETE FROM rules WHERE id=?", (rule_id,))
         cx.commit()
 
 # ════════════════════════════════════════════════
@@ -182,6 +363,9 @@ def normalize(text: str) -> str:
     t = t.lstrip("@").split("/")[0].split("?")[0]
     return f"@{t}" if t else ""
 
+
+NAV_KEYWORDS = ("شروع", "توقف", "تنظیم", "وضعیت", "بازگشت", "مسیر", "ادمین")
+
 # ════════════════════════════════════════════════
 #  کیبورد و متن
 #  نکته: style فقط سه مقدار معتبر دارد: primary (آبی)، success (سبز)،
@@ -189,440 +373,521 @@ def normalize(text: str) -> str:
 #  نسخه 22.7+ پشتیبانی می‌شود. مقدار "secondary" معتبر نیست و حذف شده.
 # ════════════════════════════════════════════════
 
-def mode_select_kb() -> InlineKeyboardMarkup:
-    """صفحه اول — انتخاب جهت فورواد"""
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📤 فورواد گروه  →  چنل", style="success", callback_data="mode_gtc")],
-        [InlineKeyboardButton("📥 فورواد چنل  →  گروه", style="primary", callback_data="mode_ctg")],
-    ])
+def main_menu_text() -> str:
+    return "🤖 *ربات فورواردر چندمسیره*\n\nیکی از گزینه‌ها را انتخاب کن:"
 
 
-def panel_kb(mode: str) -> InlineKeyboardMarkup:
-    """پنل مدیریت هر حالت"""
-    p = mode + ":"
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("▶️ شروع فورواد",   style="success", callback_data=p + "start"),
-            InlineKeyboardButton("⏹ توقف فورواد",    style="danger",  callback_data=p + "stop"),
-        ],
-        [
-            InlineKeyboardButton("📥 تنظیم منبع",    style="primary", callback_data=p + "set_src"),
-            InlineKeyboardButton("📤 تنظیم مقصد",    style="primary", callback_data=p + "set_tgt"),
-        ],
-        [
-            InlineKeyboardButton("📊 وضعیت فورواد",                   callback_data=p + "status"),
-            InlineKeyboardButton("🔙 بازگشت",                          callback_data="back"),
-        ],
-    ])
+def main_menu_kb(info: AdminInfo) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if info.is_owner or (info.permissions & set(ROUTE_PERMS)):
+        rows.append([InlineKeyboardButton("➕ افزودن مسیر جدید", style="success", callback_data="add_route")])
+    rows.append([InlineKeyboardButton("📋 لیست مسیرهای فوروارد", style="primary", callback_data="list_rules:0")])
+    if info.has("manage_admins"):
+        rows.append([InlineKeyboardButton("👥 مدیریت ادمین‌ها", style="primary", callback_data="admins")])
+    return InlineKeyboardMarkup(rows)
 
 
-def reply_kb() -> ReplyKeyboardMarkup:
-    """دکمه‌های پایین صفحه رنگی"""
-    return ReplyKeyboardMarkup(
-        [
-            [
-                KeyboardButton("▶️ شروع فورواد", style="success"),
-                KeyboardButton("⏹ توقف فورواد",  style="danger"),
-            ],
-            [
-                KeyboardButton("📥 تنظیم منبع",  style="primary"),
-                KeyboardButton("📤 تنظیم مقصد",  style="primary"),
-            ],
-            [
-                KeyboardButton("📊 وضعیت"),
-                KeyboardButton("🔙 بازگشت"),
-            ],
-        ],
-        resize_keyboard=True,
-    )
+def rule_row_label(r: Rule) -> str:
+    status = "✅" if r.active else "🔴"
+    return f"{status} #{r.id} · {r.source_title} → {r.target_title}"
 
 
-def panel_text(cfg: Config) -> str:
-    src    = f"`{cfg.source}`" if cfg.source else "─ تنظیم نشده"
-    tgt    = f"`{cfg.target}`" if cfg.target else "─ تنظیم نشده"
-    status = "✅ فعال"         if cfg.active  else "🔴 غیرفعال"
-    src_lbl, tgt_lbl = (
-        ("📥 گروه منبع",  "📤 چنل مقصد")  if cfg.mode == "gtc"
-        else ("📥 چنل منبع", "📤 گروه مقصد")
-    )
+PAGE_SIZE = 6
+
+
+def rules_list_kb(page: int) -> tuple[str, InlineKeyboardMarkup]:
+    rules = list_rules()
+    total = len(rules)
+    start = page * PAGE_SIZE
+    chunk = rules[start:start + PAGE_SIZE]
+
+    if not rules:
+        text = "📋 *لیست مسیرها*\n\nهنوز هیچ مسیر فورواردی ساخته نشده.\nاز «➕ افزودن مسیر جدید» شروع کن."
+    else:
+        text = f"📋 *لیست مسیرها* ({total} مسیر)\n\nروی هر مسیر بزن تا جزئیاتش را ببینی:"
+
+    rows = [[InlineKeyboardButton(rule_row_label(r), callback_data=f"rule:{r.id}")] for r in chunk]
+
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"list_rules:{page-1}"))
+    if start + PAGE_SIZE < total:
+        nav.append(InlineKeyboardButton("➡️ بعدی", callback_data=f"list_rules:{page+1}"))
+    if nav:
+        rows.append(nav)
+
+    rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="menu")])
+    return text, InlineKeyboardMarkup(rows)
+
+
+def rule_panel_text(r: Rule) -> str:
+    status = "✅ فعال" if r.active else "🔴 غیرفعال"
     return (
         f"╔══════════════════════╗\n"
-        f"║  🎛  {cfg.mode_label:<18}║\n"
+        f"║   🔀 مسیر شماره #{r.id:<5}║\n"
         f"╚══════════════════════╝\n\n"
-        f"{src_lbl}:  {src}\n"
-        f"{tgt_lbl}:   {tgt}\n"
-        f"📡 *فورواد:*      {status}"
+        f"🧭 نوع مسیر:   {r.direction_label}\n"
+        f"📥 منبع:        {r.source_title}  (`{r.source_id}`)\n"
+        f"📤 مقصد:        {r.target_title}  (`{r.target_id}`)\n"
+        f"📡 وضعیت:      {status}"
     )
+
+
+def rule_panel_kb(r: Rule, info: AdminInfo) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if info.has(r.direction):
+        if r.active:
+            rows.append([InlineKeyboardButton("⏹ توقف این مسیر", style="danger", callback_data=f"rule:{r.id}:stop")])
+        else:
+            rows.append([InlineKeyboardButton("▶️ شروع این مسیر", style="success", callback_data=f"rule:{r.id}:start")])
+        rows.append([InlineKeyboardButton("🗑 حذف این مسیر", style="danger", callback_data=f"rule:{r.id}:del")])
+    rows.append([InlineKeyboardButton("🔙 بازگشت به لیست", callback_data="list_rules:0")])
+    return InlineKeyboardMarkup(rows)
+
+
+def rule_del_confirm_kb(r: Rule) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ بله، حذف کن", style="danger", callback_data=f"rule:{r.id}:delok"),
+            InlineKeyboardButton("❌ انصراف", style="primary", callback_data=f"rule:{r.id}"),
+        ],
+    ])
+
+
+def admins_menu_text(admins: list[AdminInfo]) -> str:
+    lines = ["👥 *مدیریت ادمین‌ها*\n"]
+    for a in admins:
+        if a.is_owner:
+            lines.append(f"👑 `{a.user_id}` — مالک (دسترسی کامل)")
+        else:
+            perm_txt = "، ".join(PERM_LABELS[p] for p in ROUTE_PERMS if p in a.permissions)
+            if "manage_admins" in a.permissions:
+                perm_txt = (perm_txt + "، " if perm_txt else "") + PERM_LABELS["manage_admins"]
+            lines.append(f"👤 `{a.user_id}` — {perm_txt or 'بدون دسترسی'}")
+    return "\n".join(lines)
+
+
+def admins_menu_kb(admins: list[AdminInfo]) -> InlineKeyboardMarkup:
+    rows = []
+    for a in admins:
+        if a.is_owner:
+            continue
+        rows.append([InlineKeyboardButton(f"✏️ ویرایش دسترسی {a.user_id}", callback_data=f"admins:edit:{a.user_id}")])
+    rows.append([InlineKeyboardButton("➕ افزودن ادمین جدید", style="success", callback_data="admins:add")])
+    rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="menu")])
+    return InlineKeyboardMarkup(rows)
+
+
+def admin_edit_text(a: AdminInfo) -> str:
+    return f"✏️ *ویرایش دسترسی ادمین*\n\nآیدی: `{a.user_id}`\n\nروی هر دسترسی بزن تا فعال/غیرفعال بشه:"
+
+
+def admin_edit_kb(a: AdminInfo) -> InlineKeyboardMarkup:
+    rows = []
+    for perm in ALL_PERMS:
+        mark = "✅" if perm in a.permissions else "◻️"
+        rows.append([InlineKeyboardButton(f"{mark} {PERM_LABELS[perm]}", callback_data=f"aperm:{a.user_id}:{perm}")])
+    rows.append([InlineKeyboardButton("🗑 حذف این ادمین", style="danger", callback_data=f"admins:rm:{a.user_id}")])
+    rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="admins")])
+    return InlineKeyboardMarkup(rows)
+
+
+def admin_rm_confirm_kb(uid: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ بله، حذف کن", style="danger", callback_data=f"admins:rmok:{uid}"),
+            InlineKeyboardButton("❌ انصراف", style="primary", callback_data=f"admins:edit:{uid}"),
+        ],
+    ])
 
 # ════════════════════════════════════════════════
 #  /start
 # ════════════════════════════════════════════════
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    if update.effective_user.id not in ADMINS:
+    uid = update.effective_user.id
+    info = get_admin(uid)
+    if info is None:
         await update.message.reply_text("❌ شما دسترسی ندارید")
         return ConversationHandler.END
 
     ctx.user_data.clear()
     await update.message.reply_text(
-        "🤖 *ربات فورواردر دوطرفه*\n\n"
-        "جهت فورواد را انتخاب کن:",
-        reply_markup=mode_select_kb(),
+        main_menu_text(),
+        reply_markup=main_menu_kb(info),
         parse_mode="Markdown",
     )
-    return ST_MENU
+    return ST_MAIN
 
 # ════════════════════════════════════════════════
 #  هندلر دکمه‌های Inline
 # ════════════════════════════════════════════════
 
 async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    q   = update.callback_query
+    q = update.callback_query
     uid = q.from_user.id
     await q.answer()
 
-    if uid not in ADMINS:
+    info = get_admin(uid)
+    if info is None:
         await q.edit_message_text("❌ شما دسترسی ندارید")
         return ConversationHandler.END
 
     data = q.data
 
-    # ── انتخاب حالت ───────────────────────────
-    match data:
-        case "mode_gtc" | "mode_ctg":
-            mode = data.split("_")[1]
-            ctx.user_data["mode"] = mode
-            cfg = db_get(mode)
-            await q.edit_message_text(
-                panel_text(cfg),
-                reply_markup=panel_kb(mode),
-                parse_mode="Markdown",
-            )
-            # دکمه‌های پایین صفحه
-            await q.message.reply_text(
-                "از دکمه‌های پایین هم می‌تونی استفاده کنی:",
-                reply_markup=reply_kb(),
-            )
-            return ST_PANEL
+    # ── منوی اصلی ──────────────────────────────
+    if data == "menu":
+        ctx.user_data.clear()
+        await q.edit_message_text(main_menu_text(), reply_markup=main_menu_kb(info), parse_mode="Markdown")
+        return ST_MAIN
 
-        case "back":
-            ctx.user_data.pop("mode", None)
-            await q.edit_message_text(
-                "🤖 *ربات فورواردر دوطرفه*\n\nجهت فورواد را انتخاب کن:",
-                reply_markup=mode_select_kb(),
-                parse_mode="Markdown",
-            )
-            return ST_MENU
-
-    # ── دکمه‌های پنل — فرمت: {mode}:{action} ─
-    if ":" not in data:
-        return ST_PANEL
-
-    mode, action = data.split(":", 1)
-    ctx.user_data["mode"] = mode
-    cfg = db_get(mode)
-
-    match action:
-
-        case "status":
-            await q.edit_message_text(
-                "📊 *وضعیت فعلی*\n\n" + panel_text(cfg),
-                reply_markup=panel_kb(mode),
-                parse_mode="Markdown",
-            )
-
-        case "start":
-            match (cfg.source, cfg.target):
-                case (None, _):
-                    await q.answer("⚠️ ابتدا منبع را تنظیم کنید", show_alert=True)
-                    return ST_PANEL
-                case (_, None):
-                    await q.answer("⚠️ ابتدا مقصد را تنظیم کنید", show_alert=True)
-                    return ST_PANEL
-            db_set(mode, "active", 1)
-            cfg = db_get(mode)
-            await q.edit_message_text(
-                "✅ *فورواد فعال شد!*\n\n" + panel_text(cfg),
-                reply_markup=panel_kb(mode),
-                parse_mode="Markdown",
-            )
-            log.info("▶ [%s] Forwarding STARTED by admin %s", mode, uid)
-
-        case "stop":
-            db_set(mode, "active", 0)
-            cfg = db_get(mode)
-            await q.edit_message_text(
-                "⏹ *فورواد متوقف شد*\n\n" + panel_text(cfg),
-                reply_markup=panel_kb(mode),
-                parse_mode="Markdown",
-            )
-            log.info("■ [%s] Forwarding STOPPED by admin %s", mode, uid)
-
-        case "set_src":
-            src_type = "گروه یا سوپرگروه" if mode == "gtc" else "چنل"
-            await q.edit_message_text(
-                f"📥 *تنظیم منبع ({src_type})*\n\n"
-                f"یوزرنیم {src_type} را ارسال کن\n\n"
-                "فرمت‌های قابل قبول:\n"
-                "`@username`\n"
-                "`t.me/username`\n"
-                "`https://t.me/username`\n\n"
-                "برای انصراف /cancel بزن",
-                parse_mode="Markdown",
-            )
-            return ST_SRC
-
-        case "set_tgt":
-            tgt_type = "چنل" if mode == "gtc" else "گروه یا سوپرگروه"
-            await q.edit_message_text(
-                f"📤 *تنظیم مقصد ({tgt_type})*\n\n"
-                f"یوزرنیم {tgt_type} را ارسال کن\n\n"
-                "فرمت‌های قابل قبول:\n"
-                "`@username`\n"
-                "`t.me/username`\n"
-                "`https://t.me/username`\n\n"
-                + ("⚠️ ربات باید ادمین چنل باشد\n\n" if mode == "gtc" else "⚠️ ربات باید عضو گروه باشد\n\n")
-                + "برای انصراف /cancel بزن",
-                parse_mode="Markdown",
-            )
-            return ST_TGT
-
-    return ST_PANEL
-
-# ════════════════════════════════════════════════
-#  هندلر دکمه‌های Reply Keyboard
-# ════════════════════════════════════════════════
-
-async def on_reply_kb(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    uid  = update.effective_user.id
-    text = update.message.text
-    mode = ctx.user_data.get("mode")
-
-    if uid not in ADMINS or not mode:
-        return ST_PANEL
-
-    cfg = db_get(mode)
-
-    match True:
-        case _ if "شروع فورواد" in text:
-            match (cfg.source, cfg.target):
-                case (None, _):
-                    await update.message.reply_text("⚠️ ابتدا منبع را تنظیم کن")
-                    return ST_PANEL
-                case (_, None):
-                    await update.message.reply_text("⚠️ ابتدا مقصد را تنظیم کن")
-                    return ST_PANEL
-            db_set(mode, "active", 1)
-            cfg = db_get(mode)
-            await update.message.reply_text(
-                "✅ *فورواد فعال شد!*\n\n" + panel_text(cfg),
-                reply_markup=panel_kb(mode),
-                parse_mode="Markdown",
-            )
-            log.info("▶ [%s] STARTED", mode)
-
-        case _ if "توقف فورواد" in text:
-            db_set(mode, "active", 0)
-            cfg = db_get(mode)
-            await update.message.reply_text(
-                "⏹ *فورواد متوقف شد*\n\n" + panel_text(cfg),
-                reply_markup=panel_kb(mode),
-                parse_mode="Markdown",
-            )
-            log.info("■ [%s] STOPPED", mode)
-
-        case _ if "تنظیم منبع" in text:
-            src_type = "گروه یا سوپرگروه" if mode == "gtc" else "چنل"
-            await update.message.reply_text(
-                f"📥 یوزرنیم {src_type} را ارسال کن\n(مثال: @username یا t.me/username)\n\n/cancel برای انصراف"
-            )
-            return ST_SRC
-
-        case _ if "تنظیم مقصد" in text:
-            tgt_type = "چنل" if mode == "gtc" else "گروه یا سوپرگروه"
-            await update.message.reply_text(
-                f"📤 یوزرنیم {tgt_type} را ارسال کن\n(مثال: @username یا t.me/username)\n\n/cancel برای انصراف"
-            )
-            return ST_TGT
-
-        case _ if "وضعیت" in text:
-            await update.message.reply_text(
-                "📊 *وضعیت فعلی*\n\n" + panel_text(cfg),
-                reply_markup=panel_kb(mode),
-                parse_mode="Markdown",
-            )
-
-        case _ if "بازگشت" in text:
-            ctx.user_data.pop("mode", None)
-            await update.message.reply_text(
-                "🤖 *ربات فورواردر دوطرفه*\n\nجهت فورواد را انتخاب کن:",
-                reply_markup=mode_select_kb(),
-                parse_mode="Markdown",
-            )
-            return ST_MENU
-
-    return ST_PANEL
-
-# ════════════════════════════════════════════════
-#  دریافت و اعتبارسنجی منبع
-# ════════════════════════════════════════════════
-
-async def recv_src(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    mode = ctx.user_data.get("mode")
-    if not mode:
-        return ConversationHandler.END
-
-    # اگر دکمه منو زده شد
-    if any(kw in update.message.text for kw in ["شروع", "توقف", "تنظیم", "وضعیت", "بازگشت"]):
-        return await on_reply_kb(update, ctx)
-
-    username = normalize(update.message.text)
-    if not username or username == "@":
-        await update.message.reply_text(
-            "❌ یوزرنیم نامعتبر است\n\n"
-            "مثال: `@mygroup` یا `t.me/mygroup`\n\n"
-            "دوباره ارسال کن یا /cancel بزن",
+    # ── افزودن مسیر جدید ───────────────────────
+    if data == "add_route":
+        if not (info.is_owner or (info.permissions & set(ROUTE_PERMS))):
+            await q.answer("⚠️ شما اجازه‌ی ساخت مسیر فوروارد را ندارید", show_alert=True)
+            return ST_MAIN
+        ctx.user_data["new_rule"] = {}
+        await q.edit_message_text(
+            "📥 *مرحله ۱ از ۲ — منبع*\n\n"
+            "یوزرنیم گروه یا چنلِ *منبع* را ارسال کن (ربات باید عضو آن باشد)\n\n"
+            "فرمت‌های قابل‌قبول:\n`@username`\n`t.me/username`\n\n"
+            "برای انصراف /cancel بزن",
             parse_mode="Markdown",
         )
-        return ST_SRC
+        return ST_ADD_SRC
 
-    try:
-        chat = await ctx.bot.get_chat(username)
-    except Exception as e:
-        log.warning("get_chat failed for %r: %s", username, e)
-        await update.message.reply_text(
-            "❌ چت پیدا نشد!\n\n"
-            "• یوزرنیم را چک کن\n"
-            "• مطمئن شو ربات عضو آن است\n\n"
-            "دوباره ارسال کن یا /cancel بزن"
-        )
-        return ST_SRC
+    # ── لیست مسیرها ────────────────────────────
+    if data.startswith("list_rules:"):
+        page = int(data.split(":", 1)[1])
+        text, kb = rules_list_kb(page)
+        await q.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
+        return ST_MAIN
 
-    # اعتبارسنجی نوع برای منبع
-    match mode:
-        case "gtc":  # منبع باید گروه باشد
-            match chat.type:
-                case "group" | "supergroup":
-                    pass
-                case _:
-                    await update.message.reply_text("❌ این گروه نیست! یوزرنیم یک گروه یا سوپرگروه وارد کن")
-                    return ST_SRC
-        case "ctg":  # منبع باید چنل باشد
-            if chat.type != "channel":
-                await update.message.reply_text("❌ این چنل نیست! یوزرنیم یک چنل وارد کن")
-                return ST_SRC
+    # ── پنل یک مسیر خاص ────────────────────────
+    if data.startswith("rule:"):
+        parts = data.split(":")
+        rule_id = int(parts[1])
+        action = parts[2] if len(parts) > 2 else None
+        r = get_rule(rule_id)
+        if r is None:
+            await q.answer("⚠️ این مسیر دیگر وجود ندارد", show_alert=True)
+            text, kb = rules_list_kb(0)
+            await q.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
+            return ST_MAIN
 
-    db_set(mode, "source", chat.id)
-    cfg = db_get(mode)
-    log.info("[%s] Source → %s (%s)", mode, chat.title, chat.id)
-    await update.message.reply_text(
-        f"✅ منبع «*{chat.title}*» با موفقیت وصل شد 🎉\n\n" + panel_text(cfg),
-        reply_markup=panel_kb(mode),
-        parse_mode="Markdown",
-    )
-    return ST_PANEL
+        if action is None:
+            await q.edit_message_text(rule_panel_text(r), reply_markup=rule_panel_kb(r, info), parse_mode="Markdown")
+            return ST_MAIN
 
-# ════════════════════════════════════════════════
-#  دریافت و اعتبارسنجی مقصد
-# ════════════════════════════════════════════════
+        if not info.has(r.direction):
+            await q.answer("⚠️ شما اجازه‌ی مدیریت این نوع مسیر را ندارید", show_alert=True)
+            return ST_MAIN
 
-async def recv_tgt(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    mode = ctx.user_data.get("mode")
-    if not mode:
-        return ConversationHandler.END
-
-    # اگر دکمه منو زده شد
-    if any(kw in update.message.text for kw in ["شروع", "توقف", "تنظیم", "وضعیت", "بازگشت"]):
-        return await on_reply_kb(update, ctx)
-
-    username = normalize(update.message.text)
-    if not username or username == "@":
-        await update.message.reply_text(
-            "❌ یوزرنیم نامعتبر است\n\n"
-            "مثال: `@mychannel` یا `t.me/mychannel`\n\n"
-            "دوباره ارسال کن یا /cancel بزن",
-            parse_mode="Markdown",
-        )
-        return ST_TGT
-
-    try:
-        chat = await ctx.bot.get_chat(username)
-    except Exception as e:
-        log.warning("get_chat failed for %r: %s", username, e)
-        await update.message.reply_text(
-            "❌ چت پیدا نشد!\n\n"
-            "• یوزرنیم را چک کن\n"
-            "• مطمئن شو ربات عضو/ادمین آن است\n\n"
-            "دوباره ارسال کن یا /cancel بزن"
-        )
-        return ST_TGT
-
-    # اعتبارسنجی نوع برای مقصد
-    match mode:
-        case "gtc":  # مقصد باید چنل باشد
-            if chat.type != "channel":
-                await update.message.reply_text("❌ این چنل نیست! یوزرنیم یک چنل وارد کن")
-                return ST_TGT
-            # چک ادمین بودن ربات در چنل
-            try:
-                me = await ctx.bot.get_chat_member(chat.id, ctx.bot.id)
-                match me.status:
-                    case "administrator" | "creator":
-                        pass
-                    case _:
-                        raise PermissionError
-            except Exception:
-                await update.message.reply_text(
-                    "❌ ربات ادمین چنل نیست!\n\n"
-                    "۱. ربات را به چنل اضافه کن\n"
-                    "۲. دسترسی ادمین بده\n"
-                    "۳. دوباره یوزرنیم را ارسال کن"
+        match action:
+            case "start":
+                set_rule_active(rule_id, True)
+                r = get_rule(rule_id)
+                log.info("▶ Rule #%s STARTED by admin %s", rule_id, uid)
+            case "stop":
+                set_rule_active(rule_id, False)
+                r = get_rule(rule_id)
+                log.info("■ Rule #%s STOPPED by admin %s", rule_id, uid)
+            case "del":
+                await q.edit_message_text(
+                    "🗑 *حذف مسیر*\n\n" + rule_panel_text(r) + "\n\nمطمئنی می‌خوای این مسیر حذف بشه؟",
+                    reply_markup=rule_del_confirm_kb(r),
+                    parse_mode="Markdown",
                 )
-                return ST_TGT
+                return ST_MAIN
+            case "delok":
+                delete_rule(rule_id)
+                log.info("🗑 Rule #%s DELETED by admin %s", rule_id, uid)
+                text, kb = rules_list_kb(0)
+                await q.edit_message_text("✅ مسیر حذف شد\n\n" + text, reply_markup=kb, parse_mode="Markdown")
+                return ST_MAIN
 
-        case "ctg":  # مقصد باید گروه باشد
-            match chat.type:
-                case "group" | "supergroup":
-                    pass
-                case _:
-                    await update.message.reply_text("❌ این گروه نیست! یوزرنیم یک گروه یا سوپرگروه وارد کن")
-                    return ST_TGT
+        await q.edit_message_text(rule_panel_text(r), reply_markup=rule_panel_kb(r, info), parse_mode="Markdown")
+        return ST_MAIN
 
-    db_set(mode, "target", chat.id)
-    cfg = db_get(mode)
-    log.info("[%s] Target → %s (%s)", mode, chat.title, chat.id)
+    # ── مدیریت ادمین‌ها ────────────────────────
+    if data == "admins":
+        if not info.has("manage_admins"):
+            await q.answer("⚠️ شما اجازه‌ی مدیریت ادمین‌ها را ندارید", show_alert=True)
+            return ST_MAIN
+        admins = list_admins()
+        await q.edit_message_text(admins_menu_text(admins), reply_markup=admins_menu_kb(admins), parse_mode="Markdown")
+        return ST_MAIN
+
+    if data == "admins:add":
+        if not info.has("manage_admins"):
+            await q.answer("⚠️ شما اجازه‌ی مدیریت ادمین‌ها را ندارید", show_alert=True)
+            return ST_MAIN
+        await q.edit_message_text(
+            "➕ *افزودن ادمین جدید*\n\n"
+            "آیدی عددی تلگرام کاربر را ارسال کن.\n"
+            "(می‌تونی از رباتی مثل @userinfobot آیدی عددی را بگیری)\n\n"
+            "برای انصراف /cancel بزن",
+            parse_mode="Markdown",
+        )
+        return ST_ADMIN_ADD
+
+    if data.startswith("admins:edit:"):
+        if not info.has("manage_admins"):
+            await q.answer("⚠️ شما اجازه‌ی مدیریت ادمین‌ها را ندارید", show_alert=True)
+            return ST_MAIN
+        target_uid = int(data.split(":")[2])
+        target = get_admin(target_uid)
+        if target is None or target.is_owner:
+            await q.answer("⚠️ این ادمین قابل‌ویرایش نیست", show_alert=True)
+            return ST_MAIN
+        await q.edit_message_text(admin_edit_text(target), reply_markup=admin_edit_kb(target), parse_mode="Markdown")
+        return ST_MAIN
+
+    if data.startswith("admins:rm:"):
+        if not info.has("manage_admins"):
+            await q.answer("⚠️ شما اجازه‌ی مدیریت ادمین‌ها را ندارید", show_alert=True)
+            return ST_MAIN
+        target_uid = int(data.split(":")[2])
+        await q.edit_message_text(
+            f"🗑 آیا از حذف ادمین `{target_uid}` مطمئنی؟",
+            reply_markup=admin_rm_confirm_kb(target_uid),
+            parse_mode="Markdown",
+        )
+        return ST_MAIN
+
+    if data.startswith("admins:rmok:"):
+        if not info.has("manage_admins"):
+            await q.answer("⚠️ شما اجازه‌ی مدیریت ادمین‌ها را ندارید", show_alert=True)
+            return ST_MAIN
+        target_uid = int(data.split(":")[2])
+        remove_admin(target_uid)
+        log.info("👤 Admin %s removed by %s", target_uid, uid)
+        admins = list_admins()
+        await q.edit_message_text(
+            "✅ ادمین حذف شد\n\n" + admins_menu_text(admins),
+            reply_markup=admins_menu_kb(admins),
+            parse_mode="Markdown",
+        )
+        return ST_MAIN
+
+    if data.startswith("aperm:"):
+        if not info.has("manage_admins"):
+            await q.answer("⚠️ شما اجازه‌ی مدیریت ادمین‌ها را ندارید", show_alert=True)
+            return ST_MAIN
+        _, target_uid_s, perm = data.split(":")
+        target_uid = int(target_uid_s)
+        target = get_admin(target_uid)
+        if target is None or target.is_owner:
+            await q.answer("⚠️ این ادمین قابل‌ویرایش نیست", show_alert=True)
+            return ST_MAIN
+        toggle_admin_perm(target_uid, perm)
+        target = get_admin(target_uid)
+        await q.edit_message_text(admin_edit_text(target), reply_markup=admin_edit_kb(target), parse_mode="Markdown")
+        return ST_MAIN
+
+    return ST_MAIN
+
+# ════════════════════════════════════════════════
+#  دریافت و اعتبارسنجی منبع مسیر جدید
+# ════════════════════════════════════════════════
+
+async def recv_add_src(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    uid = update.effective_user.id
+    info = get_admin(uid)
+    if info is None:
+        return ConversationHandler.END
+
+    username = normalize(update.message.text)
+    if not username or username == "@":
+        await update.message.reply_text(
+            "❌ یوزرنیم نامعتبر است\n\nمثال: `@mygroup` یا `t.me/mygroup`\n\nدوباره ارسال کن یا /cancel بزن",
+            parse_mode="Markdown",
+        )
+        return ST_ADD_SRC
+
+    try:
+        chat = await ctx.bot.get_chat(username)
+    except Exception as e:
+        log.warning("get_chat failed for %r: %s", username, e)
+        await update.message.reply_text(
+            "❌ چت پیدا نشد!\n\n• یوزرنیم را چک کن\n• مطمئن شو ربات عضو آن است\n\nدوباره ارسال کن یا /cancel بزن"
+        )
+        return ST_ADD_SRC
+
+    kind = kind_of(chat.type)
+    if kind is None:
+        await update.message.reply_text("❌ این باید یک گروه، سوپرگروه یا چنل باشد")
+        return ST_ADD_SRC
+
+    try:
+        await ctx.bot.get_chat_member(chat.id, ctx.bot.id)
+    except Exception:
+        await update.message.reply_text(
+            "❌ ربات عضو این چت نیست!\n\n۱. ربات را به این چت اضافه کن\n۲. دوباره یوزرنیم را ارسال کن"
+        )
+        return ST_ADD_SRC
+
+    ctx.user_data["new_rule"] = {"source_id": chat.id, "source_title": chat.title or username, "source_kind": kind}
     await update.message.reply_text(
-        f"✅ مقصد «*{chat.title}*» با موفقیت وصل شد 🎉\n\n" + panel_text(cfg),
-        reply_markup=panel_kb(mode),
+        f"✅ منبع «*{chat.title}*» ثبت شد\n\n"
+        "📤 *مرحله ۲ از ۲ — مقصد*\n\n"
+        "یوزرنیم گروه یا چنلِ *مقصد* را ارسال کن\n"
+        "(اگر مقصد چنل است، ربات باید ادمین آن باشد)\n\n"
+        "برای انصراف /cancel بزن",
         parse_mode="Markdown",
     )
-    return ST_PANEL
+    return ST_ADD_TGT
+
+# ════════════════════════════════════════════════
+#  دریافت و اعتبارسنجی مقصد مسیر جدید
+# ════════════════════════════════════════════════
+
+async def recv_add_tgt(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    uid = update.effective_user.id
+    info = get_admin(uid)
+    if info is None:
+        return ConversationHandler.END
+
+    new_rule = ctx.user_data.get("new_rule")
+    if not new_rule or "source_id" not in new_rule:
+        await update.message.reply_text("⚠️ چیزی اشتباه شد، دوباره /start بزن")
+        return ConversationHandler.END
+
+    username = normalize(update.message.text)
+    if not username or username == "@":
+        await update.message.reply_text(
+            "❌ یوزرنیم نامعتبر است\n\nمثال: `@mychannel` یا `t.me/mychannel`\n\nدوباره ارسال کن یا /cancel بزن",
+            parse_mode="Markdown",
+        )
+        return ST_ADD_TGT
+
+    try:
+        chat = await ctx.bot.get_chat(username)
+    except Exception as e:
+        log.warning("get_chat failed for %r: %s", username, e)
+        await update.message.reply_text(
+            "❌ چت پیدا نشد!\n\n• یوزرنیم را چک کن\n• مطمئن شو ربات عضو/ادمین آن است\n\nدوباره ارسال کن یا /cancel بزن"
+        )
+        return ST_ADD_TGT
+
+    tgt_kind = kind_of(chat.type)
+    if tgt_kind is None:
+        await update.message.reply_text("❌ این باید یک گروه، سوپرگروه یا چنل باشد")
+        return ST_ADD_TGT
+
+    if chat.id == new_rule["source_id"]:
+        await update.message.reply_text("❌ مقصد نمی‌تواند همان منبع باشد\n\nیوزرنیم دیگری بفرست یا /cancel بزن")
+        return ST_ADD_TGT
+
+    direction = DIRECTIONS.get((new_rule["source_kind"], tgt_kind))
+    if direction is None:
+        await update.message.reply_text("❌ این ترکیب پشتیبانی نمی‌شود\n\nیوزرنیم دیگری بفرست یا /cancel بزن")
+        return ST_ADD_TGT
+
+    if not info.has(direction):
+        await update.message.reply_text(
+            f"⛔ شما اجازه‌ی ساخت مسیر «{PERM_LABELS[direction]}» را نداری\n\n"
+            "از یک مالک ربات بخواه این دسترسی را برایت فعال کند، یا /cancel بزن"
+        )
+        return ST_ADD_TGT
+
+    # چک ادمین بودن ربات در مقصد در صورتی که چنل باشد
+    if tgt_kind == "channel":
+        try:
+            me = await ctx.bot.get_chat_member(chat.id, ctx.bot.id)
+            if me.status not in ("administrator", "creator"):
+                raise PermissionError
+        except Exception:
+            await update.message.reply_text(
+                "❌ ربات ادمین این چنل نیست!\n\n۱. ربات را به چنل اضافه کن\n۲. دسترسی ادمین بده\n۳. دوباره یوزرنیم را ارسال کن"
+            )
+            return ST_ADD_TGT
+    else:
+        try:
+            await ctx.bot.get_chat_member(chat.id, ctx.bot.id)
+        except Exception:
+            await update.message.reply_text(
+                "❌ ربات عضو این گروه نیست!\n\n۱. ربات را به گروه اضافه کن\n۲. دوباره یوزرنیم را ارسال کن"
+            )
+            return ST_ADD_TGT
+
+    rule_id = add_rule(
+        source_id=new_rule["source_id"], source_title=new_rule["source_title"], source_kind=new_rule["source_kind"],
+        target_id=chat.id, target_title=chat.title or username, target_kind=tgt_kind,
+        direction=direction, created_by=uid,
+    )
+    ctx.user_data.pop("new_rule", None)
+
+    if rule_id is None:
+        await update.message.reply_text("⚠️ این مسیر (همین منبع و مقصد) از قبل وجود دارد")
+        text, kb = rules_list_kb(0)
+        await update.message.reply_text(text, reply_markup=kb, parse_mode="Markdown")
+        return ST_MAIN
+
+    r = get_rule(rule_id)
+    log.info("🆕 [%s] Rule #%s created: %s → %s", direction, rule_id, r.source_id, r.target_id)
+    await update.message.reply_text(
+        "🎉 مسیر جدید ساخته شد!\n\n" + rule_panel_text(r),
+        reply_markup=rule_panel_kb(r, info),
+        parse_mode="Markdown",
+    )
+    return ST_MAIN
+
+# ════════════════════════════════════════════════
+#  دریافت آیدی عددی ادمین جدید
+# ════════════════════════════════════════════════
+
+async def recv_admin_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    uid = update.effective_user.id
+    info = get_admin(uid)
+    if info is None or not info.has("manage_admins"):
+        return ConversationHandler.END
+
+    text = update.message.text.strip()
+    if not text.lstrip("-").isdigit():
+        await update.message.reply_text(
+            "❌ این یک آیدی عددی معتبر نیست\n\nفقط عدد آیدی تلگرام را بفرست، یا /cancel بزن"
+        )
+        return ST_ADMIN_ADD
+
+    new_uid = int(text)
+    existing = get_admin(new_uid)
+    if existing is not None:
+        await update.message.reply_text("⚠️ این کاربر از قبل ادمین است")
+        admins = list_admins()
+        await update.message.reply_text(admins_menu_text(admins), reply_markup=admins_menu_kb(admins), parse_mode="Markdown")
+        return ST_MAIN
+
+    add_admin(new_uid, added_by=uid)
+    log.info("👤 New admin %s added by %s", new_uid, uid)
+    target = get_admin(new_uid)
+    await update.message.reply_text(
+        f"✅ ادمین `{new_uid}` اضافه شد (فعلاً بدون دسترسی)\n\n"
+        "حالا دسترسی‌هایی که می‌خوای بهش بدی رو انتخاب کن:",
+        parse_mode="Markdown",
+    )
+    await update.message.reply_text(admin_edit_text(target), reply_markup=admin_edit_kb(target), parse_mode="Markdown")
+    return ST_MAIN
 
 # ════════════════════════════════════════════════
 #  لغو
 # ════════════════════════════════════════════════
 
 async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    if update.effective_user.id not in ADMINS:
+    uid = update.effective_user.id
+    info = get_admin(uid)
+    if info is None:
         return ConversationHandler.END
-    mode = ctx.user_data.get("mode")
-    if mode:
-        cfg = db_get(mode)
-        await update.message.reply_text(
-            "🚫 عملیات لغو شد\n\n" + panel_text(cfg),
-            reply_markup=panel_kb(mode),
-            parse_mode="Markdown",
-        )
-        return ST_PANEL
+    ctx.user_data.clear()
     await update.message.reply_text(
-        "🚫 عملیات لغو شد\n\nجهت فورواد را انتخاب کن:",
-        reply_markup=mode_select_kb(),
+        "🚫 عملیات لغو شد\n\n" + main_menu_text(),
+        reply_markup=main_menu_kb(info),
         parse_mode="Markdown",
     )
-    return ST_MENU
+    return ST_MAIN
 
 # ════════════════════════════════════════════════
-#  فورواد پیام‌ها (هر دو جهت)
+#  فورواد پیام‌ها (بین هر تعداد مسیر فعال)
 # ════════════════════════════════════════════════
 
 async def do_forward(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -631,22 +896,16 @@ async def do_forward(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     chat_id = msg.chat_id
-
-    for mode in ("gtc", "ctg"):
-        cfg = db_get(mode)
-        if not cfg.active or not cfg.ready:
-            continue
-        if chat_id != cfg.source:
-            continue
+    for r in rules_for_source(chat_id):
         try:
             await ctx.bot.forward_message(
-                chat_id=cfg.target,
+                chat_id=r.target_id,
                 from_chat_id=chat_id,
                 message_id=msg.message_id,
             )
-            log.info("📨 [%s] msg#%s  %s → %s", mode, msg.message_id, cfg.source, cfg.target)
+            log.info("📨 [%s] msg#%s  %s → %s (rule #%s)", r.direction, msg.message_id, r.source_id, r.target_id, r.id)
         except Exception as e:
-            log.error("❌ [%s] Forward failed msg#%s: %s", mode, msg.message_id, e)
+            log.error("❌ [rule #%s] Forward failed msg#%s: %s", r.id, msg.message_id, e)
 
 # ════════════════════════════════════════════════
 #  اجرا (Webhook - مخصوص Render Web Service)
@@ -679,37 +938,35 @@ def main() -> None:
             CallbackQueryHandler(on_button),
         ],
         states={
-            ST_MENU: [
+            ST_MAIN: [
                 CallbackQueryHandler(on_button),
             ],
-            ST_PANEL: [
-                CallbackQueryHandler(on_button),
-                MessageHandler(
-                    filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND,
-                    on_reply_kb,
-                ),
-            ],
-            ST_SRC: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, recv_src),
+            ST_ADD_SRC: [
+                MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, recv_add_src),
                 CommandHandler("cancel", cmd_cancel),
                 CallbackQueryHandler(on_button),
             ],
-            ST_TGT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, recv_tgt),
+            ST_ADD_TGT: [
+                MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, recv_add_tgt),
+                CommandHandler("cancel", cmd_cancel),
+                CallbackQueryHandler(on_button),
+            ],
+            ST_ADMIN_ADD: [
+                MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, recv_admin_add),
                 CommandHandler("cancel", cmd_cancel),
                 CallbackQueryHandler(on_button),
             ],
         },
         fallbacks=[
             CommandHandler("cancel", cmd_cancel),
-            CommandHandler("start",  cmd_start),
+            CommandHandler("start", cmd_start),
         ],
         per_chat=True,
         allow_reentry=True,
     )
 
-    app.add_handler(conv,                                    group=0)
-    app.add_handler(MessageHandler(fwd_filter, do_forward),  group=1)
+    app.add_handler(conv, group=0)
+    app.add_handler(MessageHandler(fwd_filter, do_forward), group=1)
 
     webhook_path = BOT_TOKEN
     full_webhook_url = f"{WEBHOOK_URL}/{webhook_path}"
