@@ -9,6 +9,10 @@
   BOT_TOKEN     ← توکن از @BotFather
   ADMINS        ← آیدی عددی مالکان اصلی ربات (با کاما جدا کنید اگر چند نفرند)
   WEBHOOK_URL   ← آدرس سرویس Render شما (مثل https://my-bot.onrender.com)
+  DATABASE_URL  ← کانکشن‌استرینگ دیتابیس Postgres سوپابیس (دائمی)
+                  از Supabase: Project Settings → Database → Connection string → URI
+                  (پیشنهاد: از حالت "Connection pooling" با پورت 6543 استفاده کنید،
+                  چون Render معمولاً IPv6 مستقیم به دیتابیس را پشتیبانی نمی‌کند)
 
 نکته: افرادی که در ADMINS قرار می‌گیرند «مالک» ربات هستند و همیشه دسترسی کامل
 دارند. مالک‌ها می‌توانند از داخل ربات ادمین‌های دیگر اضافه کنند و برای هرکدام
@@ -19,10 +23,13 @@ from __future__ import annotations
 
 import logging
 import os
-import sqlite3
 import sys
-import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
+
+import psycopg2
+import psycopg2.extras
+from psycopg2.pool import ThreadedConnectionPool
 
 from telegram import (
     InlineKeyboardButton,
@@ -65,7 +72,7 @@ WEBHOOK_URL: str = os.environ.get("WEBHOOK_URL", "").strip().rstrip("/")
 # Render پورت واقعی را از طریق متغیر PORT تزریق می‌کند.
 PORT: int = int(os.environ.get("PORT", "8443"))
 
-DB_PATH: str = "settings.db"
+DATABASE_URL: str = os.environ.get("DATABASE_URL", "").strip()
 
 if not BOT_TOKEN:
     log.critical("متغیر محیطی BOT_TOKEN تنظیم نشده است.")
@@ -75,6 +82,13 @@ if not OWNERS:
     sys.exit(1)
 if not WEBHOOK_URL:
     log.critical("متغیر محیطی WEBHOOK_URL تنظیم نشده است.")
+    sys.exit(1)
+if not DATABASE_URL:
+    log.critical(
+        "متغیر محیطی DATABASE_URL تنظیم نشده است. "
+        "این باید Connection String دیتابیس Postgres سوپابیس شما باشد "
+        "(Project Settings → Database → Connection string → URI، حالت Session/Transaction pooler توصیه می‌شود)."
+    )
     sys.exit(1)
 
 # ════════════════════════════════════════════════
@@ -159,34 +173,79 @@ class AdminInfo:
 #  دیتابیس (thread-safe)
 # ════════════════════════════════════════════════
 
-_lock = threading.Lock()
+# ════════════════════════════════════════════════
+#  دیتابیس (Supabase Postgres، دائمی — thread-safe)
+# ════════════════════════════════════════════════
+
+_pool = ThreadedConnectionPool(minconn=1, maxconn=10, dsn=DATABASE_URL)
+
+
+class _CompatCursor:
+    """
+    یک لایه‌ی نازک روی cursor پستگرس که همان الگوی «cx.execute(query, params)»ی
+    که در sqlite3 استفاده می‌شد را حفظ می‌کند (از جمله علامت‌سوال به‌عنوان
+    جای‌خالی پارامتر) تا بقیه‌ی کد بدون تغییرِ زیاد کار کند.
+    """
+
+    def __init__(self, conn):
+        self._conn = conn
+        self._cur = conn.cursor()
+
+    def execute(self, query: str, params: tuple = ()):
+        self._cur.execute(query.replace("?", "%s"), params)
+        return self
+
+    def fetchone(self):
+        return self._cur.fetchone()
+
+    def fetchall(self):
+        return self._cur.fetchall()
+
+    def commit(self):
+        # کامیت واقعی توسط خودِ context manager انجام می‌شود؛ این متد فقط
+        # برای سازگاری با کدی نگه داشته شده که صریحاً cx.commit() صدا می‌زند.
+        self._conn.commit()
+
+
+@contextmanager
+def get_conn():
+    raw = _pool.getconn()
+    try:
+        wrapper = _CompatCursor(raw)
+        yield wrapper
+        raw.commit()
+    except Exception:
+        raw.rollback()
+        raise
+    finally:
+        _pool.putconn(raw)
 
 
 def init_db() -> None:
-    with _lock, sqlite3.connect(DB_PATH) as cx:
+    with get_conn() as cx:
         cx.execute(
             """
             CREATE TABLE IF NOT EXISTS admins (
-                user_id     INTEGER PRIMARY KEY,
+                user_id     BIGINT PRIMARY KEY,
                 is_owner    INTEGER DEFAULT 0,
                 permissions TEXT    DEFAULT '',
-                added_by    INTEGER
+                added_by    BIGINT
             )
             """
         )
         cx.execute(
             """
             CREATE TABLE IF NOT EXISTS rules (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                source_id     INTEGER NOT NULL,
+                id            BIGSERIAL PRIMARY KEY,
+                source_id     BIGINT NOT NULL,
                 source_title  TEXT,
                 source_kind   TEXT NOT NULL,
-                target_id     INTEGER NOT NULL,
+                target_id     BIGINT NOT NULL,
                 target_title  TEXT,
                 target_kind   TEXT NOT NULL,
                 direction     TEXT NOT NULL,
                 active        INTEGER DEFAULT 0,
-                created_by    INTEGER,
+                created_by    BIGINT,
                 UNIQUE(source_id, target_id)
             )
             """
@@ -194,8 +253,8 @@ def init_db() -> None:
         all_perms_csv = ",".join(ALL_PERMS)
         for uid in OWNERS:
             cx.execute(
-                "INSERT OR IGNORE INTO admins (user_id, is_owner, permissions, added_by) "
-                "VALUES (?, 1, ?, NULL)",
+                "INSERT INTO admins (user_id, is_owner, permissions, added_by) "
+                "VALUES (?, 1, ?, NULL) ON CONFLICT (user_id) DO NOTHING",
                 (uid, all_perms_csv),
             )
             # مالک‌های تعریف‌شده در ENV همیشه دسترسی کامل دارند، حتی اگر قبلاً
@@ -209,7 +268,7 @@ def init_db() -> None:
 # ── ادمین‌ها ──────────────────────────────────────
 
 def get_admin(uid: int) -> AdminInfo | None:
-    with _lock, sqlite3.connect(DB_PATH) as cx:
+    with get_conn() as cx:
         row = cx.execute(
             "SELECT user_id, is_owner, permissions, added_by FROM admins WHERE user_id=?",
             (uid,),
@@ -230,7 +289,7 @@ def has_perm(uid: int, perm: str) -> bool:
 
 
 def list_admins() -> list[AdminInfo]:
-    with _lock, sqlite3.connect(DB_PATH) as cx:
+    with get_conn() as cx:
         rows = cx.execute(
             "SELECT user_id, is_owner, permissions, added_by FROM admins "
             "ORDER BY is_owner DESC, user_id ASC"
@@ -243,17 +302,17 @@ def list_admins() -> list[AdminInfo]:
 
 
 def add_admin(uid: int, added_by: int) -> None:
-    with _lock, sqlite3.connect(DB_PATH) as cx:
+    with get_conn() as cx:
         cx.execute(
-            "INSERT OR IGNORE INTO admins (user_id, is_owner, permissions, added_by) "
-            "VALUES (?, 0, '', ?)",
+            "INSERT INTO admins (user_id, is_owner, permissions, added_by) "
+            "VALUES (?, 0, '', ?) ON CONFLICT (user_id) DO NOTHING",
             (uid, added_by),
         )
         cx.commit()
 
 
 def remove_admin(uid: int) -> None:
-    with _lock, sqlite3.connect(DB_PATH) as cx:
+    with get_conn() as cx:
         cx.execute("DELETE FROM admins WHERE user_id=? AND is_owner=0", (uid,))
         cx.commit()
 
@@ -267,7 +326,7 @@ def toggle_admin_perm(uid: int, perm: str) -> None:
         perms.discard(perm)
     else:
         perms.add(perm)
-    with _lock, sqlite3.connect(DB_PATH) as cx:
+    with get_conn() as cx:
         cx.execute(
             "UPDATE admins SET permissions=? WHERE user_id=?",
             (",".join(sorted(perms)), uid),
@@ -291,34 +350,35 @@ def add_rule(source_id: int, source_title: str, source_kind: str,
              target_id: int, target_title: str, target_kind: str,
              direction: str, created_by: int) -> int | None:
     try:
-        with _lock, sqlite3.connect(DB_PATH) as cx:
+        with get_conn() as cx:
             cur = cx.execute(
                 "INSERT INTO rules (source_id, source_title, source_kind, target_id, "
                 "target_title, target_kind, direction, active, created_by) "
-                "VALUES (?,?,?,?,?,?,?,0,?)",
+                "VALUES (?,?,?,?,?,?,?,0,?) RETURNING id",
                 (source_id, source_title, source_kind, target_id, target_title, target_kind,
                  direction, created_by),
             )
+            row = cur.fetchone()
             cx.commit()
-            return cur.lastrowid
-    except sqlite3.IntegrityError:
+            return row[0] if row else None
+    except psycopg2.IntegrityError:
         return None  # این مسیر از قبل وجود دارد
 
 
 def get_rule(rule_id: int) -> Rule | None:
-    with _lock, sqlite3.connect(DB_PATH) as cx:
+    with get_conn() as cx:
         row = cx.execute(f"SELECT {_RULE_COLS} FROM rules WHERE id=?", (rule_id,)).fetchone()
     return _row_to_rule(row) if row else None
 
 
 def list_rules() -> list[Rule]:
-    with _lock, sqlite3.connect(DB_PATH) as cx:
+    with get_conn() as cx:
         rows = cx.execute(f"SELECT {_RULE_COLS} FROM rules ORDER BY id ASC").fetchall()
     return [_row_to_rule(r) for r in rows]
 
 
 def rules_for_source(source_id: int) -> list[Rule]:
-    with _lock, sqlite3.connect(DB_PATH) as cx:
+    with get_conn() as cx:
         rows = cx.execute(
             f"SELECT {_RULE_COLS} FROM rules WHERE active=1 AND source_id=?", (source_id,)
         ).fetchall()
@@ -326,13 +386,13 @@ def rules_for_source(source_id: int) -> list[Rule]:
 
 
 def set_rule_active(rule_id: int, active: bool) -> None:
-    with _lock, sqlite3.connect(DB_PATH) as cx:
+    with get_conn() as cx:
         cx.execute("UPDATE rules SET active=? WHERE id=?", (1 if active else 0, rule_id))
         cx.commit()
 
 
 def delete_rule(rule_id: int) -> None:
-    with _lock, sqlite3.connect(DB_PATH) as cx:
+    with get_conn() as cx:
         cx.execute("DELETE FROM rules WHERE id=?", (rule_id,))
         cx.commit()
 
@@ -380,6 +440,45 @@ def parse_chat_ref(text: str) -> str | int | None:
     if not username or username == "@":
         return None
     return username
+
+
+def is_invite_link(text: str) -> bool:
+    """
+    تشخیص لینک‌های دعوت خصوصی مثل:
+      t.me/+AbCdEfGhIjK
+      https://t.me/+AbCdEfGhIjK
+      t.me/joinchat/AbCdEfGhIjK
+    این‌ها هشِ دعوت هستند نه یوزرنیم و Bot API نمی‌تواند مستقیماً
+    از روی آن‌ها چت را پیدا کند (getChat این فرمت را پشتیبانی نمی‌کند).
+    """
+    t = text.strip().lower()
+    for prefix in (
+        "https://telegram.me/",
+        "https://t.me/",
+        "http://t.me/",
+        "telegram.me/",
+        "t.me/",
+    ):
+        if t.startswith(prefix):
+            t = t[len(prefix):]
+            break
+    return t.startswith("+") or t.startswith("joinchat/")
+
+
+def chat_from_forward(update: Update):
+    """
+    اگر کاربر پیامی را از چنل/گروهِ موردنظر همینجا فوروارد کند، این تابع
+    خودِ چتِ مبدأ فوروارد را برمی‌گرداند — حتی اگر آن چنل/گروه خصوصی و
+    بدون یوزرنیم باشد. این بهترین راه برای چنل‌های خصوصی است چون کاربر
+    مجبور نیست آیدی عددی را دستی پیدا کند.
+    نکته: اگر چنل «مخفی‌سازی نام فوروارد» را فعال کرده باشد، این روش کار
+    نمی‌کند و کاربر باید آیدی عددی را مستقیم بفرستد.
+    """
+    msg = update.message
+    origin = getattr(msg, "forward_origin", None)
+    if origin is None:
+        return None
+    return getattr(origin, "chat", None) or getattr(origin, "sender_chat", None)
 
 
 NAV_KEYWORDS = ("شروع", "توقف", "تنظیم", "وضعیت", "بازگشت", "مسیر", "ادمین")
@@ -569,6 +668,7 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
             "📥 *مرحله ۱ از ۲ — منبع*\n\n"
             "یوزرنیم یا آیدی عددیِ گروه/چنلِ *منبع* را ارسال کن (ربات باید عضو آن باشد)\n\n"
             "فرمت‌های قابل‌قبول:\n`@username`\n`t.me/username`\n`-1001234567890` (آیدی عددی — برای چت‌های خصوصی بدون یوزرنیم)\n\n"
+            "🔒 برای چت‌های *خصوصی* (بدون یوزرنیم و بدون لینک عمومی): یک پیام از همان چت را همینجا فوروارد کن، ربات خودش آیدی را تشخیص می‌دهد\n\n"
             "برای انصراف /cancel بزن",
             parse_mode="Markdown",
         )
@@ -715,22 +815,40 @@ async def recv_add_src(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if info is None:
         return ConversationHandler.END
 
-    ref = parse_chat_ref(update.message.text)
-    if ref is None:
-        await update.message.reply_text(
-            "❌ ورودی نامعتبر است\n\nمثال: `@mygroup`، `t.me/mygroup` یا آیدی عددی `-1001234567890`\n\nدوباره ارسال کن یا /cancel بزن",
-            parse_mode="Markdown",
-        )
-        return ST_ADD_SRC
+    fwd_chat = chat_from_forward(update)
+    if fwd_chat is not None:
+        chat = fwd_chat
+    else:
+        text = update.message.text or ""
+        if is_invite_link(text):
+            await update.message.reply_text(
+                "❌ لینک‌های دعوت خصوصی (`t.me/+...`) به‌تنهایی برای ربات قابل‌استفاده نیستند\n\n"
+                "به‌جایش یکی از این دو راه را انجام بده:\n"
+                "۱️⃣ یک پیام از همان گروه/چنل را همینجا فوروارد کن (ربات خودش تشخیص می‌دهد)\n"
+                "۲️⃣ ربات را در آن چت عضو/ادمین کن و آیدی عددی چت (مثل `-1001234567890`) را بفرست\n\n"
+                "برای انصراف /cancel بزن",
+                parse_mode="Markdown",
+            )
+            return ST_ADD_SRC
 
-    try:
-        chat = await ctx.bot.get_chat(ref)
-    except Exception as e:
-        log.warning("get_chat failed for %r: %s", ref, e)
-        await update.message.reply_text(
-            "❌ چت پیدا نشد!\n\n• یوزرنیم/آیدی را چک کن\n• مطمئن شو ربات عضو آن است\n\nدوباره ارسال کن یا /cancel بزن"
-        )
-        return ST_ADD_SRC
+        ref = parse_chat_ref(text)
+        if ref is None:
+            await update.message.reply_text(
+                "❌ ورودی نامعتبر است\n\nمثال: `@mygroup`، `t.me/mygroup`، آیدی عددی `-1001234567890` یا فوروارد یک پیام از آن چت\n\nدوباره ارسال کن یا /cancel بزن",
+                parse_mode="Markdown",
+            )
+            return ST_ADD_SRC
+
+        try:
+            chat = await ctx.bot.get_chat(ref)
+        except Exception as e:
+            log.warning("get_chat failed for %r: %s", ref, e)
+            await update.message.reply_text(
+                "❌ چت پیدا نشد!\n\n• یوزرنیم/آیدی را چک کن\n• مطمئن شو ربات عضو آن است\n"
+                "• یا به‌جای تایپ آیدی، یک پیام از آن چت را همینجا فوروارد کن\n\n"
+                "دوباره ارسال کن یا /cancel بزن"
+            )
+            return ST_ADD_SRC
 
     kind = kind_of(chat.type)
     if kind is None:
@@ -745,12 +863,13 @@ async def recv_add_src(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         )
         return ST_ADD_SRC
 
-    ctx.user_data["new_rule"] = {"source_id": chat.id, "source_title": chat.title or str(ref), "source_kind": kind}
+    ctx.user_data["new_rule"] = {"source_id": chat.id, "source_title": chat.title or str(chat.id), "source_kind": kind}
     await update.message.reply_text(
         f"✅ منبع «*{chat.title}*» ثبت شد\n\n"
         "📤 *مرحله ۲ از ۲ — مقصد*\n\n"
         "یوزرنیم یا آیدی عددیِ گروه/چنلِ *مقصد* را ارسال کن\n"
         "(اگر مقصد چنل است، ربات باید ادمین آن باشد)\n\n"
+        "🔒 برای چت‌های *خصوصی*: یک پیام از همان چت را همینجا فوروارد کن، ربات خودش آیدی را تشخیص می‌دهد\n\n"
         "برای انصراف /cancel بزن",
         parse_mode="Markdown",
     )
@@ -771,22 +890,40 @@ async def recv_add_tgt(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text("⚠️ چیزی اشتباه شد، دوباره /start بزن")
         return ConversationHandler.END
 
-    ref = parse_chat_ref(update.message.text)
-    if ref is None:
-        await update.message.reply_text(
-            "❌ ورودی نامعتبر است\n\nمثال: `@mychannel`، `t.me/mychannel` یا آیدی عددی `-1001234567890`\n\nدوباره ارسال کن یا /cancel بزن",
-            parse_mode="Markdown",
-        )
-        return ST_ADD_TGT
+    fwd_chat = chat_from_forward(update)
+    if fwd_chat is not None:
+        chat = fwd_chat
+    else:
+        text = update.message.text or ""
+        if is_invite_link(text):
+            await update.message.reply_text(
+                "❌ لینک‌های دعوت خصوصی (`t.me/+...`) به‌تنهایی برای ربات قابل‌استفاده نیستند\n\n"
+                "به‌جایش یکی از این دو راه را انجام بده:\n"
+                "۱️⃣ یک پیام از همان گروه/چنل را همینجا فوروارد کن (ربات خودش تشخیص می‌دهد)\n"
+                "۲️⃣ ربات را در آن چت عضو/ادمین کن و آیدی عددی چت (مثل `-1001234567890`) را بفرست\n\n"
+                "برای انصراف /cancel بزن",
+                parse_mode="Markdown",
+            )
+            return ST_ADD_TGT
 
-    try:
-        chat = await ctx.bot.get_chat(ref)
-    except Exception as e:
-        log.warning("get_chat failed for %r: %s", ref, e)
-        await update.message.reply_text(
-            "❌ چت پیدا نشد!\n\n• یوزرنیم/آیدی را چک کن\n• مطمئن شو ربات عضو/ادمین آن است\n\nدوباره ارسال کن یا /cancel بزن"
-        )
-        return ST_ADD_TGT
+        ref = parse_chat_ref(text)
+        if ref is None:
+            await update.message.reply_text(
+                "❌ ورودی نامعتبر است\n\nمثال: `@mychannel`، `t.me/mychannel`، آیدی عددی `-1001234567890` یا فوروارد یک پیام از آن چت\n\nدوباره ارسال کن یا /cancel بزن",
+                parse_mode="Markdown",
+            )
+            return ST_ADD_TGT
+
+        try:
+            chat = await ctx.bot.get_chat(ref)
+        except Exception as e:
+            log.warning("get_chat failed for %r: %s", ref, e)
+            await update.message.reply_text(
+                "❌ چت پیدا نشد!\n\n• یوزرنیم/آیدی را چک کن\n• مطمئن شو ربات عضو/ادمین آن است\n"
+                "• یا به‌جای تایپ آیدی، یک پیام از آن چت را همینجا فوروارد کن\n\n"
+                "دوباره ارسال کن یا /cancel بزن"
+            )
+            return ST_ADD_TGT
 
     tgt_kind = kind_of(chat.type)
     if tgt_kind is None:
@@ -831,7 +968,7 @@ async def recv_add_tgt(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
     rule_id = add_rule(
         source_id=new_rule["source_id"], source_title=new_rule["source_title"], source_kind=new_rule["source_kind"],
-        target_id=chat.id, target_title=chat.title or str(ref), target_kind=tgt_kind,
+        target_id=chat.id, target_title=chat.title or str(chat.id), target_kind=tgt_kind,
         direction=direction, created_by=uid,
     )
     ctx.user_data.pop("new_rule", None)
@@ -960,12 +1097,18 @@ def main() -> None:
                 CallbackQueryHandler(on_button),
             ],
             ST_ADD_SRC: [
-                MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, recv_add_src),
+                MessageHandler(
+                    filters.ChatType.PRIVATE & ~filters.COMMAND & (filters.TEXT | filters.FORWARDED),
+                    recv_add_src,
+                ),
                 CommandHandler("cancel", cmd_cancel),
                 CallbackQueryHandler(on_button),
             ],
             ST_ADD_TGT: [
-                MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, recv_add_tgt),
+                MessageHandler(
+                    filters.ChatType.PRIVATE & ~filters.COMMAND & (filters.TEXT | filters.FORWARDED),
+                    recv_add_tgt,
+                ),
                 CommandHandler("cancel", cmd_cancel),
                 CallbackQueryHandler(on_button),
             ],
