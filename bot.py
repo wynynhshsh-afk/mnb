@@ -9,10 +9,9 @@
   BOT_TOKEN     ← توکن از @BotFather
   ADMINS        ← آیدی عددی مالکان اصلی ربات (با کاما جدا کنید اگر چند نفرند)
   WEBHOOK_URL   ← آدرس سرویس Render شما (مثل https://my-bot.onrender.com)
-  DATABASE_URL  ← کانکشن‌استرینگ دیتابیس Postgres سوپابیس (دائمی)
-                  از Supabase: Project Settings → Database → Connection string → URI
-                  (پیشنهاد: از حالت "Connection pooling" با پورت 6543 استفاده کنید،
-                  چون Render معمولاً IPv6 مستقیم به دیتابیس را پشتیبانی نمی‌کند)
+  SUPABASE_URL  ← از Project Settings → General → Project URL
+  SUPABASE_KEY  ← از Project Settings → API Keys → Secret keys
+                  (کلیدی که با sb_secret_ شروع می‌شود، نه publishable/anon)
 
 نکته: افرادی که در ADMINS قرار می‌گیرند «مالک» ربات هستند و همیشه دسترسی کامل
 دارند. مالک‌ها می‌توانند از داخل ربات ادمین‌های دیگر اضافه کنند و برای هرکدام
@@ -24,12 +23,10 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 
-import psycopg2
-import psycopg2.extras
-from psycopg2.pool import ThreadedConnectionPool
+from postgrest.exceptions import APIError
+from supabase import create_client, Client
 
 from telegram import (
     InlineKeyboardButton,
@@ -72,7 +69,8 @@ WEBHOOK_URL: str = os.environ.get("WEBHOOK_URL", "").strip().rstrip("/")
 # Render پورت واقعی را از طریق متغیر PORT تزریق می‌کند.
 PORT: int = int(os.environ.get("PORT", "8443"))
 
-DATABASE_URL: str = os.environ.get("DATABASE_URL", "").strip()
+SUPABASE_URL: str = os.environ.get("SUPABASE_URL", "").strip()
+SUPABASE_KEY: str = os.environ.get("SUPABASE_KEY", "").strip()
 
 if not BOT_TOKEN:
     log.critical("متغیر محیطی BOT_TOKEN تنظیم نشده است.")
@@ -83,11 +81,12 @@ if not OWNERS:
 if not WEBHOOK_URL:
     log.critical("متغیر محیطی WEBHOOK_URL تنظیم نشده است.")
     sys.exit(1)
-if not DATABASE_URL:
+if not SUPABASE_URL or not SUPABASE_KEY:
     log.critical(
-        "متغیر محیطی DATABASE_URL تنظیم نشده است. "
-        "این باید Connection String دیتابیس Postgres سوپابیس شما باشد "
-        "(Project Settings → Database → Connection string → URI، حالت Session/Transaction pooler توصیه می‌شود)."
+        "متغیرهای محیطی SUPABASE_URL و/یا SUPABASE_KEY تنظیم نشده‌اند. "
+        "SUPABASE_URL را از Project Settings → General → Project URL بردارید، "
+        "و SUPABASE_KEY را از Project Settings → API Keys → بخش Secret keys "
+        "(کلیدی که با sb_secret_ شروع می‌شود، نه publishable) بردارید."
     )
     sys.exit(1)
 
@@ -170,113 +169,48 @@ class AdminInfo:
         return self.is_owner or perm in self.permissions
 
 # ════════════════════════════════════════════════
-#  دیتابیس (thread-safe)
+#  دیتابیس (Supabase — دائمی، از طریق REST API)
 # ════════════════════════════════════════════════
+#
+# نکته‌ی مهم: این لایه با REST API سوپابیس (کتابخانه‌ی supabase-py) کار می‌کند
+# نه اتصال مستقیم Postgres، پس مشکلات شبکه‌ای IPv6/pooler که سرویس‌هایی مثل
+# Render با اتصال مستقیم دارند اینجا مطرح نیست.
+#
+# جدول‌ها را REST API نمی‌تواند خودش بسازد (DDL ندارد)، پس باید یک‌بار از
+# طریق SQL Editor پنل سوپابیس ساخته شوند. اسکریپت لازم را در فایل
+# supabase_schema.sql کنار همین پروژه قرار داده‌ایم.
 
-# ════════════════════════════════════════════════
-#  دیتابیس (Supabase Postgres، دائمی — thread-safe)
-# ════════════════════════════════════════════════
-
-_pool = ThreadedConnectionPool(minconn=1, maxconn=10, dsn=DATABASE_URL)
-
-
-class _CompatCursor:
-    """
-    یک لایه‌ی نازک روی cursor پستگرس که همان الگوی «cx.execute(query, params)»ی
-    که در sqlite3 استفاده می‌شد را حفظ می‌کند (از جمله علامت‌سوال به‌عنوان
-    جای‌خالی پارامتر) تا بقیه‌ی کد بدون تغییرِ زیاد کار کند.
-    """
-
-    def __init__(self, conn):
-        self._conn = conn
-        self._cur = conn.cursor()
-
-    def execute(self, query: str, params: tuple = ()):
-        self._cur.execute(query.replace("?", "%s"), params)
-        return self
-
-    def fetchone(self):
-        return self._cur.fetchone()
-
-    def fetchall(self):
-        return self._cur.fetchall()
-
-    def commit(self):
-        # کامیت واقعی توسط خودِ context manager انجام می‌شود؛ این متد فقط
-        # برای سازگاری با کدی نگه داشته شده که صریحاً cx.commit() صدا می‌زند.
-        self._conn.commit()
-
-
-@contextmanager
-def get_conn():
-    raw = _pool.getconn()
-    try:
-        wrapper = _CompatCursor(raw)
-        yield wrapper
-        raw.commit()
-    except Exception:
-        raw.rollback()
-        raise
-    finally:
-        _pool.putconn(raw)
+sb: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
 def init_db() -> None:
-    with get_conn() as cx:
-        cx.execute(
-            """
-            CREATE TABLE IF NOT EXISTS admins (
-                user_id     BIGINT PRIMARY KEY,
-                is_owner    INTEGER DEFAULT 0,
-                permissions TEXT    DEFAULT '',
-                added_by    BIGINT
-            )
-            """
-        )
-        cx.execute(
-            """
-            CREATE TABLE IF NOT EXISTS rules (
-                id            BIGSERIAL PRIMARY KEY,
-                source_id     BIGINT NOT NULL,
-                source_title  TEXT,
-                source_kind   TEXT NOT NULL,
-                target_id     BIGINT NOT NULL,
-                target_title  TEXT,
-                target_kind   TEXT NOT NULL,
-                direction     TEXT NOT NULL,
-                active        INTEGER DEFAULT 0,
-                created_by    BIGINT,
-                UNIQUE(source_id, target_id)
-            )
-            """
-        )
-        all_perms_csv = ",".join(ALL_PERMS)
-        for uid in OWNERS:
-            cx.execute(
-                "INSERT INTO admins (user_id, is_owner, permissions, added_by) "
-                "VALUES (?, 1, ?, NULL) ON CONFLICT (user_id) DO NOTHING",
-                (uid, all_perms_csv),
-            )
-            # مالک‌های تعریف‌شده در ENV همیشه دسترسی کامل دارند، حتی اگر قبلاً
-            # به شکل دیگری در دیتابیس ثبت شده باشند.
-            cx.execute(
-                "UPDATE admins SET is_owner=1, permissions=? WHERE user_id=?",
-                (all_perms_csv, uid),
-            )
-        cx.commit()
+    """
+    مالک‌های تعریف‌شده در ENV (ADMINS) را با دسترسی کامل در دیتابیس ثبت/به‌روزرسانی می‌کند.
+    (ساخت جدول‌ها به‌عهده‌ی supabase_schema.sql است — یک‌بار در SQL Editor اجرا شود.)
+    """
+    all_perms_csv = ",".join(ALL_PERMS)
+    for uid in OWNERS:
+        # مالک‌های ENV همیشه دسترسی کامل دارند، حتی اگر قبلاً به شکل دیگری
+        # در دیتابیس ثبت شده باشند؛ upsert بدون ignore_duplicates یعنی
+        # اگر از قبل هست، رکورد آپدیت می‌شود.
+        sb.table("admins").upsert(
+            {"user_id": uid, "is_owner": True, "permissions": all_perms_csv, "added_by": None},
+            on_conflict="user_id",
+        ).execute()
 
 # ── ادمین‌ها ──────────────────────────────────────
 
 def get_admin(uid: int) -> AdminInfo | None:
-    with get_conn() as cx:
-        row = cx.execute(
-            "SELECT user_id, is_owner, permissions, added_by FROM admins WHERE user_id=?",
-            (uid,),
-        ).fetchone()
-    if not row:
+    res = sb.table("admins").select("*").eq("user_id", uid).limit(1).execute()
+    rows = res.data
+    if not rows:
         return None
-    perms = {p for p in row[2].split(",") if p}
-    return AdminInfo(user_id=row[0], is_owner=bool(row[1]), permissions=perms, added_by=row[3])
+    row = rows[0]
+    perms = {p for p in (row.get("permissions") or "").split(",") if p}
+    return AdminInfo(
+        user_id=row["user_id"], is_owner=bool(row.get("is_owner")),
+        permissions=perms, added_by=row.get("added_by"),
+    )
 
 
 def is_admin(uid: int) -> bool:
@@ -289,32 +223,33 @@ def has_perm(uid: int, perm: str) -> bool:
 
 
 def list_admins() -> list[AdminInfo]:
-    with get_conn() as cx:
-        rows = cx.execute(
-            "SELECT user_id, is_owner, permissions, added_by FROM admins "
-            "ORDER BY is_owner DESC, user_id ASC"
-        ).fetchall()
+    res = (
+        sb.table("admins").select("*")
+        .order("is_owner", desc=True).order("user_id")
+        .execute()
+    )
     out = []
-    for r in rows:
-        perms = {p for p in r[2].split(",") if p}
-        out.append(AdminInfo(user_id=r[0], is_owner=bool(r[1]), permissions=perms, added_by=r[3]))
+    for r in res.data:
+        perms = {p for p in (r.get("permissions") or "").split(",") if p}
+        out.append(AdminInfo(
+            user_id=r["user_id"], is_owner=bool(r.get("is_owner")),
+            permissions=perms, added_by=r.get("added_by"),
+        ))
     return out
 
 
 def add_admin(uid: int, added_by: int) -> None:
-    with get_conn() as cx:
-        cx.execute(
-            "INSERT INTO admins (user_id, is_owner, permissions, added_by) "
-            "VALUES (?, 0, '', ?) ON CONFLICT (user_id) DO NOTHING",
-            (uid, added_by),
-        )
-        cx.commit()
+    # ignore_duplicates=True یعنی اگر از قبل وجود دارد دست‌نخورده می‌ماند
+    # (معادل رفتار قبلیِ INSERT OR IGNORE).
+    sb.table("admins").upsert(
+        {"user_id": uid, "is_owner": False, "permissions": "", "added_by": added_by},
+        on_conflict="user_id",
+        ignore_duplicates=True,
+    ).execute()
 
 
 def remove_admin(uid: int) -> None:
-    with get_conn() as cx:
-        cx.execute("DELETE FROM admins WHERE user_id=? AND is_owner=0", (uid,))
-        cx.commit()
+    sb.table("admins").delete().eq("user_id", uid).eq("is_owner", False).execute()
 
 
 def toggle_admin_perm(uid: int, perm: str) -> None:
@@ -326,75 +261,61 @@ def toggle_admin_perm(uid: int, perm: str) -> None:
         perms.discard(perm)
     else:
         perms.add(perm)
-    with get_conn() as cx:
-        cx.execute(
-            "UPDATE admins SET permissions=? WHERE user_id=?",
-            (",".join(sorted(perms)), uid),
-        )
-        cx.commit()
+    sb.table("admins").update({"permissions": ",".join(sorted(perms))}).eq("user_id", uid).execute()
 
 # ── مسیرهای فوروارد ───────────────────────────────
 
-def _row_to_rule(row) -> Rule:
+def _row_to_rule(row: dict) -> Rule:
     return Rule(
-        id=row[0], source_id=row[1], source_title=row[2] or "—", source_kind=row[3],
-        target_id=row[4], target_title=row[5] or "—", target_kind=row[6],
-        direction=row[7], active=bool(row[8]), created_by=row[9],
+        id=row["id"], source_id=row["source_id"], source_title=row.get("source_title") or "—",
+        source_kind=row["source_kind"],
+        target_id=row["target_id"], target_title=row.get("target_title") or "—",
+        target_kind=row["target_kind"],
+        direction=row["direction"], active=bool(row.get("active")), created_by=row.get("created_by"),
     )
-
-
-_RULE_COLS = "id, source_id, source_title, source_kind, target_id, target_title, target_kind, direction, active, created_by"
 
 
 def add_rule(source_id: int, source_title: str, source_kind: str,
              target_id: int, target_title: str, target_kind: str,
              direction: str, created_by: int) -> int | None:
     try:
-        with get_conn() as cx:
-            cur = cx.execute(
-                "INSERT INTO rules (source_id, source_title, source_kind, target_id, "
-                "target_title, target_kind, direction, active, created_by) "
-                "VALUES (?,?,?,?,?,?,?,0,?) RETURNING id",
-                (source_id, source_title, source_kind, target_id, target_title, target_kind,
-                 direction, created_by),
-            )
-            row = cur.fetchone()
-            cx.commit()
-            return row[0] if row else None
-    except psycopg2.IntegrityError:
-        return None  # این مسیر از قبل وجود دارد
+        res = sb.table("rules").insert({
+            "source_id": source_id, "source_title": source_title, "source_kind": source_kind,
+            "target_id": target_id, "target_title": target_title, "target_kind": target_kind,
+            "direction": direction, "active": False, "created_by": created_by,
+        }).execute()
+        return res.data[0]["id"] if res.data else None
+    except APIError as e:
+        if getattr(e, "code", None) == "23505" or "duplicate key" in str(e).lower():
+            return None  # این مسیر (همین منبع و مقصد) از قبل وجود دارد
+        raise
 
 
 def get_rule(rule_id: int) -> Rule | None:
-    with get_conn() as cx:
-        row = cx.execute(f"SELECT {_RULE_COLS} FROM rules WHERE id=?", (rule_id,)).fetchone()
-    return _row_to_rule(row) if row else None
+    res = sb.table("rules").select("*").eq("id", rule_id).limit(1).execute()
+    return _row_to_rule(res.data[0]) if res.data else None
 
 
 def list_rules() -> list[Rule]:
-    with get_conn() as cx:
-        rows = cx.execute(f"SELECT {_RULE_COLS} FROM rules ORDER BY id ASC").fetchall()
-    return [_row_to_rule(r) for r in rows]
+    res = sb.table("rules").select("*").order("id").execute()
+    return [_row_to_rule(r) for r in res.data]
 
 
 def rules_for_source(source_id: int) -> list[Rule]:
-    with get_conn() as cx:
-        rows = cx.execute(
-            f"SELECT {_RULE_COLS} FROM rules WHERE active=1 AND source_id=?", (source_id,)
-        ).fetchall()
-    return [_row_to_rule(r) for r in rows]
+    res = (
+        sb.table("rules").select("*")
+        .eq("active", True).eq("source_id", source_id)
+        .execute()
+    )
+    return [_row_to_rule(r) for r in res.data]
 
 
 def set_rule_active(rule_id: int, active: bool) -> None:
-    with get_conn() as cx:
-        cx.execute("UPDATE rules SET active=? WHERE id=?", (1 if active else 0, rule_id))
-        cx.commit()
+    sb.table("rules").update({"active": active}).eq("id", rule_id).execute()
 
 
 def delete_rule(rule_id: int) -> None:
-    with get_conn() as cx:
-        cx.execute("DELETE FROM rules WHERE id=?", (rule_id,))
-        cx.commit()
+    sb.table("rules").delete().eq("id", rule_id).execute()
 
 # ════════════════════════════════════════════════
 #  ابزار: نرمال‌سازی یوزرنیم
