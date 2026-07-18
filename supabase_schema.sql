@@ -23,5 +23,9 @@ create table if not exists rules (
     direction     text not null,
     active        boolean default false,
     created_by    bigint,
+    bot_slot      integer not null default 1,  -- کدام ربات (۱ تا ۶) مسئول این مسیر است
     unique (source_id, target_id)
 );
+
+-- اگر جدول rules از قبل ساخته شده (نصب قدیمی)، فقط همین خط زیر را جدا اجرا کنید:
+-- alter table rules add column if not exists bot_slot integer not null default 1;

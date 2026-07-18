@@ -2,16 +2,30 @@
 ╔══════════════════════════════════════════════════╗
 ║      ربات فورواردر چندمسیره (نامحدود) 🤖         ║
 ║  python-telegram-bot 22.7+  |  Python 3.14+      ║
-║  حالت اجرا: Webhook (مخصوص Render Web Service)   ║
+║  حالت اجرا: Polling (مخصوص Render Background Worker) ║
+║  پشتیبانی از حداکثر ۶ ربات هم‌زمان، یک دیتابیس مشترک ║
 ╚══════════════════════════════════════════════════╝
 
 متغیرهای محیطی اجباری (در Render تنظیم کنید):
-  BOT_TOKEN     ← توکن از @BotFather
+  BOT_TOKEN_1   ← توکن ربات #۱ (همان که پنل مدیریت کامل را دارد) — الزامی
+  BOT_TOKEN_2   ← توکن ربات #۲ (اختیاری — فقط فوروارد می‌کند، بدون پنل)
+  BOT_TOKEN_3   ← ...  تا BOT_TOKEN_6 (اختیاری، هرکدام تنظیم شود فعال می‌شود)
   ADMINS        ← آیدی عددی مالکان اصلی ربات (با کاما جدا کنید اگر چند نفرند)
-  WEBHOOK_URL   ← آدرس سرویس Render شما (مثل https://my-bot.onrender.com)
   SUPABASE_URL  ← از Project Settings → General → Project URL
   SUPABASE_KEY  ← از Project Settings → API Keys → Secret keys
                   (کلیدی که با sb_secret_ شروع می‌شود، نه publishable/anon)
+
+نکته مهم: این نسخه از حالت webhook به polling تغییر کرده. یعنی این سرویس
+باید به‌عنوان «Background Worker» روی Render دیپلوی بشه، نه Web Service،
+چون دیگه پورتی باز نمی‌کنه و منتظر ریکوئست HTTP نمی‌مونه (و در نتیجه هیچ‌وقت
+به‌خاطر بی‌فعالیتیِ HTTP نمی‌خوابه).
+
+نکته‌ی دیگر: تا ۶ ربات مختلف می‌توانند هم‌زمان اجرا شوند و همه به همین یک
+دیتابیس وصل می‌شوند. هر مسیر فوروارد مشخص می‌کند کدام ربات (۱ تا ۶) مسئول
+آن است — پس همان ربات باید از قبل در چت منبع و مقصدِ آن مسیر عضو/ادمین شده
+باشد. فقط ربات #۱ منوی مدیریت (افزودن مسیر، لیست مسیرها، ادمین‌ها) را دارد؛
+بقیه فقط بی‌صدا فوروارد می‌کنند. برای اضافه‌کردن ستون لازم به دیتابیس، فایل
+supabase_schema.sql را ببینید (ستون bot_slot).
 
 نکته: افرادی که در ADMINS قرار می‌گیرند «مالک» ربات هستند و همیشه دسترسی کامل
 دارند. مالک‌ها می‌توانند از داخل ربات ادمین‌های دیگر اضافه کنند و برای هرکدام
@@ -20,6 +34,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import sys
@@ -29,10 +44,12 @@ from postgrest.exceptions import APIError
 from supabase import create_client, Client
 
 from telegram import (
+    Bot,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Update,
 )
+from telegram.error import RetryAfter, TelegramError
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -57,29 +74,33 @@ log = logging.getLogger(__name__)
 #  تنظیمات  ← از متغیرهای محیطی خوانده می‌شود
 # ════════════════════════════════════════════════
 
-BOT_TOKEN: str = os.environ.get("BOT_TOKEN", "").strip()
+BOT_TOKEN: str = os.environ.get("BOT_TOKEN", "").strip()  # سازگاری با نسخه‌ی قبلی (ربات #۱)
+
+# متغیرهای BOT_TOKEN_1 تا BOT_TOKEN_6 ← تا ۶ ربات مختلف که همه به یک دیتابیس
+# وصل می‌شوند. فقط ربات #۱ پنل مدیریت را دارد؛ بقیه فقط فوروارد می‌کنند.
+_bot_tokens: list[str] = []
+for _i in range(1, 7):
+    _tok = os.environ.get(f"BOT_TOKEN_{_i}", "").strip()
+    if _tok:
+        _bot_tokens.append(_tok)
+if not _bot_tokens and BOT_TOKEN:
+    _bot_tokens = [BOT_TOKEN]
+BOT_TOKENS: list[str] = _bot_tokens
+BOT_TOKEN = BOT_TOKENS[0] if BOT_TOKENS else ""  # ربات #۱ (همان که پنل مدیریت را دارد)
 
 _owners_raw = os.environ.get("ADMINS", "").strip()
 OWNERS: list[int] = [
     int(part) for part in _owners_raw.split(",") if part.strip().lstrip("-").isdigit()
 ]
 
-WEBHOOK_URL: str = os.environ.get("WEBHOOK_URL", "").strip().rstrip("/")
-
-# Render پورت واقعی را از طریق متغیر PORT تزریق می‌کند.
-PORT: int = int(os.environ.get("PORT", "8443"))
-
 SUPABASE_URL: str = os.environ.get("SUPABASE_URL", "").strip()
 SUPABASE_KEY: str = os.environ.get("SUPABASE_KEY", "").strip()
 
-if not BOT_TOKEN:
-    log.critical("متغیر محیطی BOT_TOKEN تنظیم نشده است.")
+if not BOT_TOKENS:
+    log.critical("هیچ‌کدام از متغیرهای BOT_TOKEN_1..BOT_TOKEN_6 (یا BOT_TOKEN) تنظیم نشده‌اند.")
     sys.exit(1)
 if not OWNERS:
     log.critical("متغیر محیطی ADMINS تنظیم نشده یا نامعتبر است.")
-    sys.exit(1)
-if not WEBHOOK_URL:
-    log.critical("متغیر محیطی WEBHOOK_URL تنظیم نشده است.")
     sys.exit(1)
 if not SUPABASE_URL or not SUPABASE_KEY:
     log.critical(
@@ -98,8 +119,9 @@ if not SUPABASE_URL or not SUPABASE_KEY:
     ST_MAIN,        # منوی اصلی / همه‌ی ناوبری با دکمه (callback)
     ST_ADD_SRC,     # انتظار یوزرنیم منبع مسیر جدید
     ST_ADD_TGT,     # انتظار یوزرنیم مقصد مسیر جدید
+    ST_ADD_BOT,     # انتظار انتخاب اینکه کدام ربات (۱ تا ۶) مسئول این مسیر باشد
     ST_ADMIN_ADD,   # انتظار آیدی عددی ادمین جدید
-) = range(4)
+) = range(5)
 
 # ════════════════════════════════════════════════
 #  دسترسی‌ها (Permissions)
@@ -152,6 +174,7 @@ class Rule:
     direction: str
     active: bool
     created_by: int | None
+    bot_slot: int = 1
 
     @property
     def direction_label(self) -> str:
@@ -272,17 +295,19 @@ def _row_to_rule(row: dict) -> Rule:
         target_id=row["target_id"], target_title=row.get("target_title") or "—",
         target_kind=row["target_kind"],
         direction=row["direction"], active=bool(row.get("active")), created_by=row.get("created_by"),
+        bot_slot=int(row.get("bot_slot") or 1),
     )
 
 
 def add_rule(source_id: int, source_title: str, source_kind: str,
              target_id: int, target_title: str, target_kind: str,
-             direction: str, created_by: int) -> int | None:
+             direction: str, created_by: int, bot_slot: int = 1) -> int | None:
     try:
         res = sb.table("rules").insert({
             "source_id": source_id, "source_title": source_title, "source_kind": source_kind,
             "target_id": target_id, "target_title": target_title, "target_kind": target_kind,
             "direction": direction, "active": False, "created_by": created_by,
+            "bot_slot": bot_slot,
         }).execute()
         return res.data[0]["id"] if res.data else None
     except APIError as e:
@@ -301,10 +326,10 @@ def list_rules() -> list[Rule]:
     return [_row_to_rule(r) for r in res.data]
 
 
-def rules_for_source(source_id: int) -> list[Rule]:
+def rules_for_source(source_id: int, bot_slot: int) -> list[Rule]:
     res = (
         sb.table("rules").select("*")
-        .eq("active", True).eq("source_id", source_id)
+        .eq("active", True).eq("source_id", source_id).eq("bot_slot", bot_slot)
         .execute()
     )
     return [_row_to_rule(r) for r in res.data]
@@ -427,7 +452,7 @@ def main_menu_kb(info: AdminInfo) -> InlineKeyboardMarkup:
 
 def rule_row_label(r: Rule) -> str:
     status = "✅" if r.active else "🔴"
-    return f"{status} #{r.id} · {r.source_title} → {r.target_title}"
+    return f"{status} #{r.id} · 🤖{r.bot_slot} · {r.source_title} → {r.target_title}"
 
 
 PAGE_SIZE = 6
@@ -465,6 +490,7 @@ def rule_panel_text(r: Rule) -> str:
         f"║   🔀 مسیر شماره #{r.id:<5}║\n"
         f"╚══════════════════════╝\n\n"
         f"🧭 نوع مسیر:   {r.direction_label}\n"
+        f"🤖 ربات مسئول: ربات #{r.bot_slot}\n"
         f"📥 منبع:        {r.source_title}  (`{r.source_id}`)\n"
         f"📤 مقصد:        {r.target_title}  (`{r.target_id}`)\n"
         f"📡 وضعیت:      {status}"
@@ -537,6 +563,20 @@ def admin_rm_confirm_kb(uid: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton("❌ انصراف", style="primary", callback_data=f"admins:edit:{uid}"),
         ],
     ])
+
+
+def bot_slot_kb() -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for i in range(1, len(BOT_TOKENS) + 1):
+        row.append(InlineKeyboardButton(f"🤖 ربات #{i}", callback_data=f"addbot:{i}"))
+        if len(row) == 3:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton("🚫 انصراف", style="danger", callback_data="menu")])
+    return InlineKeyboardMarkup(rows)
 
 # ════════════════════════════════════════════════
 #  /start
@@ -709,6 +749,12 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         )
         return ST_MAIN
 
+    # ── انتخاب ربات مسئول برای مسیر جدید ───────
+    if data.startswith("addbot:"):
+        slot = int(data.split(":", 1)[1])
+        new_state = await _finalize_new_rule(q.message, ctx, uid, info, bot_slot=slot)
+        return new_state
+
     if data.startswith("aperm:"):
         if not info.has("manage_admins"):
             await q.answer("⚠️ شما اجازه‌ی مدیریت ادمین‌ها را ندارید", show_alert=True)
@@ -867,42 +913,100 @@ async def recv_add_tgt(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         )
         return ST_ADD_TGT
 
-    # چک ادمین بودن ربات در مقصد در صورتی که چنل باشد
-    if tgt_kind == "channel":
-        try:
-            me = await ctx.bot.get_chat_member(chat.id, ctx.bot.id)
-            if me.status not in ("administrator", "creator"):
-                raise PermissionError
-        except Exception:
-            await update.message.reply_text(
-                "❌ ربات ادمین این چنل نیست!\n\n۱. ربات را به چنل اضافه کن\n۲. دسترسی ادمین بده\n۳. دوباره یوزرنیم را ارسال کن"
-            )
-            return ST_ADD_TGT
-    else:
-        try:
-            await ctx.bot.get_chat_member(chat.id, ctx.bot.id)
-        except Exception:
-            await update.message.reply_text(
-                "❌ ربات عضو این گروه نیست!\n\n۱. ربات را به گروه اضافه کن\n۲. دوباره یوزرنیم را ارسال کن"
-            )
-            return ST_ADD_TGT
-
-    rule_id = add_rule(
-        source_id=new_rule["source_id"], source_title=new_rule["source_title"], source_kind=new_rule["source_kind"],
-        target_id=chat.id, target_title=chat.title or str(chat.id), target_kind=tgt_kind,
-        direction=direction, created_by=uid,
-    )
+    ctx.user_data["pending_rule"] = {
+        "source_id": new_rule["source_id"], "source_title": new_rule["source_title"],
+        "source_kind": new_rule["source_kind"],
+        "target_id": chat.id, "target_title": chat.title or str(chat.id), "target_kind": tgt_kind,
+        "direction": direction,
+    }
     ctx.user_data.pop("new_rule", None)
 
+    if len(BOT_TOKENS) == 1:
+        # فقط یک ربات تنظیم شده؛ نیازی به پرسیدن نیست، خودکار ربات #۱ انتخاب می‌شود
+        return await _finalize_new_rule(update.message, ctx, uid, info, bot_slot=1)
+
+    await update.message.reply_text(
+        "🤖 *مرحله ۳ از ۳ — انتخاب ربات مسئول*\n\n"
+        "کدام ربات این مسیر را فوروارد کند؟\n"
+        "⚠️ حتماً همان ربات را از قبل در هر دو چت (منبع و مقصد) عضو/ادمین کرده باش، "
+        "وگرنه فوروارد کار نمی‌کند.",
+        reply_markup=bot_slot_kb(),
+        parse_mode="Markdown",
+    )
+    return ST_ADD_BOT
+
+# ════════════════════════════════════════════════
+#  نهایی‌سازی ساخت مسیر (بعد از انتخاب ربات مسئول)
+# ════════════════════════════════════════════════
+
+async def _finalize_new_rule(reply_target, ctx: ContextTypes.DEFAULT_TYPE, uid: int, info: AdminInfo, bot_slot: int) -> int:
+    pending = ctx.user_data.get("pending_rule")
+    if not pending:
+        await reply_target.reply_text("⚠️ چیزی اشتباه شد، دوباره /start بزن")
+        return ConversationHandler.END
+
+    if bot_slot < 1 or bot_slot > len(BOT_TOKENS):
+        await reply_target.reply_text("⚠️ شماره‌ی ربات نامعتبر است")
+        return ST_ADD_BOT
+
+    # چک عضویت همون ربات انتخاب‌شده (نه لزوماً ربات #۱) در منبع و مقصد
+    tmp_bot = Bot(token=BOT_TOKENS[bot_slot - 1])
+    try:
+        await tmp_bot.initialize()
+        try:
+            await tmp_bot.get_chat_member(pending["source_id"], tmp_bot.id)
+        except Exception:
+            await reply_target.reply_text(
+                f"❌ ربات #{bot_slot} در چت *منبع* ({pending['source_title']}) عضو نیست\n\n"
+                "اول رباتِ انتخابی را در آن چت عضو/ادمین کن، بعد دوباره امتحان کن.",
+                reply_markup=bot_slot_kb(),
+                parse_mode="Markdown",
+            )
+            return ST_ADD_BOT
+
+        if pending["target_kind"] == "channel":
+            try:
+                me = await tmp_bot.get_chat_member(pending["target_id"], tmp_bot.id)
+                if me.status not in ("administrator", "creator"):
+                    raise PermissionError
+            except Exception:
+                await reply_target.reply_text(
+                    f"❌ ربات #{bot_slot} ادمینِ چنلِ *مقصد* ({pending['target_title']}) نیست\n\n"
+                    "اول رباتِ انتخابی را در آن چنل ادمین کن، بعد دوباره امتحان کن.",
+                    reply_markup=bot_slot_kb(),
+                    parse_mode="Markdown",
+                )
+                return ST_ADD_BOT
+        else:
+            try:
+                await tmp_bot.get_chat_member(pending["target_id"], tmp_bot.id)
+            except Exception:
+                await reply_target.reply_text(
+                    f"❌ ربات #{bot_slot} در گروهِ *مقصد* ({pending['target_title']}) عضو نیست\n\n"
+                    "اول رباتِ انتخابی را در آن گروه عضو کن، بعد دوباره امتحان کن.",
+                    reply_markup=bot_slot_kb(),
+                    parse_mode="Markdown",
+                )
+                return ST_ADD_BOT
+    finally:
+        await tmp_bot.shutdown()
+
+    rule_id = add_rule(
+        source_id=pending["source_id"], source_title=pending["source_title"], source_kind=pending["source_kind"],
+        target_id=pending["target_id"], target_title=pending["target_title"], target_kind=pending["target_kind"],
+        direction=pending["direction"], created_by=uid, bot_slot=bot_slot,
+    )
+    ctx.user_data.pop("pending_rule", None)
+
     if rule_id is None:
-        await update.message.reply_text("⚠️ این مسیر (همین منبع و مقصد) از قبل وجود دارد")
+        await reply_target.reply_text("⚠️ این مسیر (همین منبع و مقصد) از قبل وجود دارد")
         text, kb = rules_list_kb(0)
-        await update.message.reply_text(text, reply_markup=kb, parse_mode="Markdown")
+        await reply_target.reply_text(text, reply_markup=kb, parse_mode="Markdown")
         return ST_MAIN
 
     r = get_rule(rule_id)
-    log.info("🆕 [%s] Rule #%s created: %s → %s", direction, rule_id, r.source_id, r.target_id)
-    await update.message.reply_text(
+    log.info("🆕 [%s] Rule #%s created: %s → %s (bot #%s)", pending["direction"], rule_id, r.source_id, r.target_id, bot_slot)
+    await reply_target.reply_text(
         "🎉 مسیر جدید ساخته شد!\n\n" + rule_panel_text(r),
         reply_markup=rule_panel_kb(r, info),
         parse_mode="Markdown",
@@ -966,34 +1070,55 @@ async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 #  فورواد پیام‌ها (بین هر تعداد مسیر فعال)
 # ════════════════════════════════════════════════
 
-async def do_forward(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    msg = update.message or update.channel_post
-    if msg is None:
-        return
+MAX_FLOOD_RETRIES = 3
 
-    chat_id = msg.chat_id
-    for r in rules_for_source(chat_id):
-        try:
-            await ctx.bot.forward_message(
-                chat_id=r.target_id,
-                from_chat_id=chat_id,
-                message_id=msg.message_id,
+
+async def _forward_one(ctx: ContextTypes.DEFAULT_TYPE, r: Rule, chat_id: int, msg_id: int, attempt: int = 1) -> None:
+    try:
+        await ctx.bot.forward_message(
+            chat_id=r.target_id,
+            from_chat_id=chat_id,
+            message_id=msg_id,
+        )
+        log.info("📨 [%s] msg#%s  %s → %s (rule #%s)", r.direction, msg_id, r.source_id, r.target_id, r.id)
+    except RetryAfter as e:
+        wait_s = float(e.retry_after) + 1
+        if attempt <= MAX_FLOOD_RETRIES:
+            log.warning(
+                "⏳ [rule #%s] Flood control on msg#%s, retrying in %.0fs (attempt %s/%s)",
+                r.id, msg_id, wait_s, attempt, MAX_FLOOD_RETRIES,
             )
-            log.info("📨 [%s] msg#%s  %s → %s (rule #%s)", r.direction, msg.message_id, r.source_id, r.target_id, r.id)
-        except Exception as e:
-            log.error("❌ [rule #%s] Forward failed msg#%s: %s", r.id, msg.message_id, e)
+            await asyncio.sleep(wait_s)
+            await _forward_one(ctx, r, chat_id, msg_id, attempt + 1)
+        else:
+            log.error(
+                "❌ [rule #%s] Gave up on msg#%s after %s flood-control retries (last wait: %.0fs)",
+                r.id, msg_id, MAX_FLOOD_RETRIES, wait_s,
+            )
+    except TelegramError as e:
+        log.error("❌ [rule #%s] Forward failed msg#%s: %s", r.id, msg_id, e)
+
+
+def make_do_forward(bot_slot: int):
+    async def do_forward(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        msg = update.message or update.channel_post
+        if msg is None:
+            return
+
+        chat_id = msg.chat_id
+        for r in rules_for_source(chat_id, bot_slot):
+            # هر فوروارد یه تسک جدا و بدون هیچ تاخیری اجرا می‌شه؛
+            # اگه یکی به فلود کنترل بخوره، بقیه‌ی قوانین و پیام‌های بعدی معطلش نمی‌مونن.
+            ctx.application.create_task(_forward_one(ctx, r, chat_id, msg.message_id))
+
+    return do_forward
 
 # ════════════════════════════════════════════════
-#  اجرا (Webhook - مخصوص Render Web Service)
+#  اجرا (Polling - مخصوص Render Background Worker)
 # ════════════════════════════════════════════════
 
-def main() -> None:
-    init_db()
-    log.info("🚀 Bot starting (Python 3.14 | PTB 22.7+ | Webhook mode)...")
-
-    app = Application.builder().token(BOT_TOKEN).build()
-
-    fwd_filter = (
+def build_forward_filter() -> filters.BaseFilter:
+    return (
         (filters.ChatType.GROUPS | filters.ChatType.CHANNEL)
         & (
             filters.TEXT
@@ -1007,6 +1132,11 @@ def main() -> None:
             | filters.ANIMATION
         )
     )
+
+
+def build_admin_app(token: str) -> Application:
+    """ربات #۱ — همان که پنل کامل مدیریت (منو، مسیرها، ادمین‌ها) را دارد."""
+    app = Application.builder().token(token).build()
 
     conv = ConversationHandler(
         entry_points=[
@@ -1033,6 +1163,10 @@ def main() -> None:
                 CommandHandler("cancel", cmd_cancel),
                 CallbackQueryHandler(on_button),
             ],
+            ST_ADD_BOT: [
+                CallbackQueryHandler(on_button),
+                CommandHandler("cancel", cmd_cancel),
+            ],
             ST_ADMIN_ADD: [
                 MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, recv_admin_add),
                 CommandHandler("cancel", cmd_cancel),
@@ -1048,20 +1182,52 @@ def main() -> None:
     )
 
     app.add_handler(conv, group=0)
-    app.add_handler(MessageHandler(fwd_filter, do_forward), group=1)
+    app.add_handler(MessageHandler(build_forward_filter(), make_do_forward(bot_slot=1)), group=1)
+    return app
 
-    webhook_path = BOT_TOKEN
-    full_webhook_url = f"{WEBHOOK_URL}/{webhook_path}"
 
-    log.info("✅ Bot is running (webhook on port %s)...", PORT)
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        url_path=webhook_path,
-        webhook_url=full_webhook_url,
-        allowed_updates=Update.ALL_TYPES,
-        drop_pending_updates=True,
+def build_worker_app(token: str, bot_slot: int) -> Application:
+    """ربات‌های #۲ تا #۶ — بدون پنل مدیریت، فقط فوروارد مسیرهای متعلق به همین ربات."""
+    app = Application.builder().token(token).build()
+    app.add_handler(MessageHandler(build_forward_filter(), make_do_forward(bot_slot=bot_slot)), group=1)
+    return app
+
+
+async def run_all_bots() -> None:
+    apps: list[Application] = [build_admin_app(BOT_TOKENS[0])]
+    for i, token in enumerate(BOT_TOKENS[1:], start=2):
+        apps.append(build_worker_app(token, bot_slot=i))
+
+    for i, app in enumerate(apps, start=1):
+        await app.initialize()
+        await app.start()
+        await app.updater.start_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True,
+        )
+        log.info("✅ ربات #%s آماده و در حال polling است...", i)
+
+    log.info("🚀 همه‌ی %s ربات با موفقیت اجرا شدند. (فقط ربات #۱ پنل مدیریت دارد)", len(apps))
+
+    try:
+        await asyncio.Event().wait()  # تا وقتی سرویس زنده است، همینجا منتظر می‌مانیم
+    finally:
+        for app in apps:
+            try:
+                await app.updater.stop()
+                await app.stop()
+                await app.shutdown()
+            except Exception as e:
+                log.warning("خطا هنگام خاموش‌کردن یکی از ربات‌ها: %s", e)
+
+
+def main() -> None:
+    init_db()
+    log.info(
+        "🚀 Bot starting (Python 3.14 | PTB 22.7+ | Polling mode | %s ربات پیکربندی‌شده)...",
+        len(BOT_TOKENS),
     )
+    asyncio.run(run_all_bots())
 
 
 if __name__ == "__main__":
