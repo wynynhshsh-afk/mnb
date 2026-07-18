@@ -24,6 +24,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import sys
@@ -37,6 +38,7 @@ from telegram import (
     InlineKeyboardMarkup,
     Update,
 )
+from telegram.error import RetryAfter, TelegramError
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -962,6 +964,35 @@ async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 #  فورواد پیام‌ها (بین هر تعداد مسیر فعال)
 # ════════════════════════════════════════════════
 
+MAX_FLOOD_RETRIES = 3
+
+
+async def _forward_one(ctx: ContextTypes.DEFAULT_TYPE, r: Rule, chat_id: int, msg_id: int, attempt: int = 1) -> None:
+    try:
+        await ctx.bot.forward_message(
+            chat_id=r.target_id,
+            from_chat_id=chat_id,
+            message_id=msg_id,
+        )
+        log.info("📨 [%s] msg#%s  %s → %s (rule #%s)", r.direction, msg_id, r.source_id, r.target_id, r.id)
+    except RetryAfter as e:
+        wait_s = float(e.retry_after) + 1
+        if attempt <= MAX_FLOOD_RETRIES:
+            log.warning(
+                "⏳ [rule #%s] Flood control on msg#%s, retrying in %.0fs (attempt %s/%s)",
+                r.id, msg_id, wait_s, attempt, MAX_FLOOD_RETRIES,
+            )
+            await asyncio.sleep(wait_s)
+            await _forward_one(ctx, r, chat_id, msg_id, attempt + 1)
+        else:
+            log.error(
+                "❌ [rule #%s] Gave up on msg#%s after %s flood-control retries (last wait: %.0fs)",
+                r.id, msg_id, MAX_FLOOD_RETRIES, wait_s,
+            )
+    except TelegramError as e:
+        log.error("❌ [rule #%s] Forward failed msg#%s: %s", r.id, msg_id, e)
+
+
 async def do_forward(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.message or update.channel_post
     if msg is None:
@@ -969,15 +1000,9 @@ async def do_forward(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     chat_id = msg.chat_id
     for r in rules_for_source(chat_id):
-        try:
-            await ctx.bot.forward_message(
-                chat_id=r.target_id,
-                from_chat_id=chat_id,
-                message_id=msg.message_id,
-            )
-            log.info("📨 [%s] msg#%s  %s → %s (rule #%s)", r.direction, msg.message_id, r.source_id, r.target_id, r.id)
-        except Exception as e:
-            log.error("❌ [rule #%s] Forward failed msg#%s: %s", r.id, msg.message_id, e)
+        # هر فوروارد یه تسک جدا و بدون هیچ تاخیری اجرا می‌شه؛
+        # اگه یکی به فلود کنترل بخوره، بقیه‌ی قوانین و پیام‌های بعدی معطلش نمی‌مونن.
+        ctx.application.create_task(_forward_one(ctx, r, chat_id, msg.message_id))
 
 # ════════════════════════════════════════════════
 #  اجرا (Polling - مخصوص Render Background Worker)
