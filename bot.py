@@ -2,20 +2,16 @@
 ╔══════════════════════════════════════════════════╗
 ║      ربات فورواردر چندمسیره (نامحدود) 🤖         ║
 ║  python-telegram-bot 22.7+  |  Python 3.14+      ║
-║  حالت اجرا: Polling (مخصوص Render Background Worker) ║
+║  حالت اجرا: Webhook (مخصوص Render Web Service)   ║
 ╚══════════════════════════════════════════════════╝
 
 متغیرهای محیطی اجباری (در Render تنظیم کنید):
   BOT_TOKEN     ← توکن از @BotFather
   ADMINS        ← آیدی عددی مالکان اصلی ربات (با کاما جدا کنید اگر چند نفرند)
+  WEBHOOK_URL   ← آدرس سرویس Render شما (مثل https://my-bot.onrender.com)
   SUPABASE_URL  ← از Project Settings → General → Project URL
   SUPABASE_KEY  ← از Project Settings → API Keys → Secret keys
                   (کلیدی که با sb_secret_ شروع می‌شود، نه publishable/anon)
-
-نکته مهم: این نسخه از حالت webhook به polling تغییر کرده. یعنی این سرویس
-باید به‌عنوان «Background Worker» روی Render دیپلوی بشه، نه Web Service،
-چون دیگه پورتی باز نمی‌کنه و منتظر ریکوئست HTTP نمی‌مونه (و در نتیجه هیچ‌وقت
-به‌خاطر بی‌فعالیتیِ HTTP نمی‌خوابه).
 
 نکته: افرادی که در ADMINS قرار می‌گیرند «مالک» ربات هستند و همیشه دسترسی کامل
 دارند. مالک‌ها می‌توانند از داخل ربات ادمین‌های دیگر اضافه کنند و برای هرکدام
@@ -24,7 +20,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import sys
@@ -38,7 +33,6 @@ from telegram import (
     InlineKeyboardMarkup,
     Update,
 )
-from telegram.error import RetryAfter, TelegramError
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -70,6 +64,11 @@ OWNERS: list[int] = [
     int(part) for part in _owners_raw.split(",") if part.strip().lstrip("-").isdigit()
 ]
 
+WEBHOOK_URL: str = os.environ.get("WEBHOOK_URL", "").strip().rstrip("/")
+
+# Render پورت واقعی را از طریق متغیر PORT تزریق می‌کند.
+PORT: int = int(os.environ.get("PORT", "8443"))
+
 SUPABASE_URL: str = os.environ.get("SUPABASE_URL", "").strip()
 SUPABASE_KEY: str = os.environ.get("SUPABASE_KEY", "").strip()
 
@@ -78,6 +77,9 @@ if not BOT_TOKEN:
     sys.exit(1)
 if not OWNERS:
     log.critical("متغیر محیطی ADMINS تنظیم نشده یا نامعتبر است.")
+    sys.exit(1)
+if not WEBHOOK_URL:
+    log.critical("متغیر محیطی WEBHOOK_URL تنظیم نشده است.")
     sys.exit(1)
 if not SUPABASE_URL or not SUPABASE_KEY:
     log.critical(
@@ -964,35 +966,6 @@ async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 #  فورواد پیام‌ها (بین هر تعداد مسیر فعال)
 # ════════════════════════════════════════════════
 
-MAX_FLOOD_RETRIES = 3
-
-
-async def _forward_one(ctx: ContextTypes.DEFAULT_TYPE, r: Rule, chat_id: int, msg_id: int, attempt: int = 1) -> None:
-    try:
-        await ctx.bot.forward_message(
-            chat_id=r.target_id,
-            from_chat_id=chat_id,
-            message_id=msg_id,
-        )
-        log.info("📨 [%s] msg#%s  %s → %s (rule #%s)", r.direction, msg_id, r.source_id, r.target_id, r.id)
-    except RetryAfter as e:
-        wait_s = float(e.retry_after) + 1
-        if attempt <= MAX_FLOOD_RETRIES:
-            log.warning(
-                "⏳ [rule #%s] Flood control on msg#%s, retrying in %.0fs (attempt %s/%s)",
-                r.id, msg_id, wait_s, attempt, MAX_FLOOD_RETRIES,
-            )
-            await asyncio.sleep(wait_s)
-            await _forward_one(ctx, r, chat_id, msg_id, attempt + 1)
-        else:
-            log.error(
-                "❌ [rule #%s] Gave up on msg#%s after %s flood-control retries (last wait: %.0fs)",
-                r.id, msg_id, MAX_FLOOD_RETRIES, wait_s,
-            )
-    except TelegramError as e:
-        log.error("❌ [rule #%s] Forward failed msg#%s: %s", r.id, msg_id, e)
-
-
 async def do_forward(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.message or update.channel_post
     if msg is None:
@@ -1000,17 +973,23 @@ async def do_forward(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     chat_id = msg.chat_id
     for r in rules_for_source(chat_id):
-        # هر فوروارد یه تسک جدا و بدون هیچ تاخیری اجرا می‌شه؛
-        # اگه یکی به فلود کنترل بخوره، بقیه‌ی قوانین و پیام‌های بعدی معطلش نمی‌مونن.
-        ctx.application.create_task(_forward_one(ctx, r, chat_id, msg.message_id))
+        try:
+            await ctx.bot.forward_message(
+                chat_id=r.target_id,
+                from_chat_id=chat_id,
+                message_id=msg.message_id,
+            )
+            log.info("📨 [%s] msg#%s  %s → %s (rule #%s)", r.direction, msg.message_id, r.source_id, r.target_id, r.id)
+        except Exception as e:
+            log.error("❌ [rule #%s] Forward failed msg#%s: %s", r.id, msg.message_id, e)
 
 # ════════════════════════════════════════════════
-#  اجرا (Polling - مخصوص Render Background Worker)
+#  اجرا (Webhook - مخصوص Render Web Service)
 # ════════════════════════════════════════════════
 
 def main() -> None:
     init_db()
-    log.info("🚀 Bot starting (Python 3.14 | PTB 22.7+ | Polling mode)...")
+    log.info("🚀 Bot starting (Python 3.14 | PTB 22.7+ | Webhook mode)...")
 
     app = Application.builder().token(BOT_TOKEN).build()
 
@@ -1071,8 +1050,15 @@ def main() -> None:
     app.add_handler(conv, group=0)
     app.add_handler(MessageHandler(fwd_filter, do_forward), group=1)
 
-    log.info("✅ Bot is running (long polling)...")
-    app.run_polling(
+    webhook_path = BOT_TOKEN
+    full_webhook_url = f"{WEBHOOK_URL}/{webhook_path}"
+
+    log.info("✅ Bot is running (webhook on port %s)...", PORT)
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=webhook_path,
+        webhook_url=full_webhook_url,
         allowed_updates=Update.ALL_TYPES,
         drop_pending_updates=True,
     )
