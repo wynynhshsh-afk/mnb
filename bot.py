@@ -2,7 +2,7 @@
 ╔══════════════════════════════════════════════════╗
 ║      ربات فورواردر چندمسیره (نامحدود) 🤖         ║
 ║  python-telegram-bot 22.7+  |  Python 3.14+      ║
-║  حالت اجرا: Polling (مخصوص Render Background Worker) ║
+║  حالت اجرا: Webhook (مخصوص Render Web Service)   ║
 ║  پشتیبانی از حداکثر ۶ ربات هم‌زمان، یک دیتابیس مشترک ║
 ╚══════════════════════════════════════════════════╝
 
@@ -11,14 +11,21 @@
   BOT_TOKEN_2   ← توکن ربات #۲ (اختیاری — فقط فوروارد می‌کند، بدون پنل)
   BOT_TOKEN_3   ← ...  تا BOT_TOKEN_6 (اختیاری، هرکدام تنظیم شود فعال می‌شود)
   ADMINS        ← آیدی عددی مالکان اصلی ربات (با کاما جدا کنید اگر چند نفرند)
+  WEBHOOK_URL   ← آدرس سرویس Render شما (مثل https://my-bot.onrender.com)
   SUPABASE_URL  ← از Project Settings → General → Project URL
   SUPABASE_KEY  ← از Project Settings → API Keys → Secret keys
                   (کلیدی که با sb_secret_ شروع می‌شود، نه publishable/anon)
 
-نکته مهم: این نسخه از حالت webhook به polling تغییر کرده. یعنی این سرویس
-باید به‌عنوان «Background Worker» روی Render دیپلوی بشه، نه Web Service،
-چون دیگه پورتی باز نمی‌کنه و منتظر ریکوئست HTTP نمی‌مونه (و در نتیجه هیچ‌وقت
-به‌خاطر بی‌فعالیتیِ HTTP نمی‌خوابه).
+نکته مهم: این نسخه روی حالت webhook کار می‌کند، پس باید به‌عنوان «Web Service»
+روی Render دیپلوی بشه (نه Background Worker). همه‌ی رباتها روی همین یک پورت
+مشترک (که Render از طریق PORT تزریق می‌کند) جواب می‌دهند؛ هرکدام مسیر
+وبهوکِ مخصوص به خودش را دارد (بر پایه‌ی توکنش، پس حدس‌زدنی نیست).
+
+⚠️ اگر از پلن رایگان (Free) رندر استفاده می‌کنی، این سرویس بعد از چند دقیقه
+بی‌فعالیتی HTTP می‌خوابد و وقتی پیام جدیدی برسد، تلگرام باید دوباره تلاش کند
+تا سرویس بیدار شود — یعنی همان تاخیرِ چند دقیقه‌ای که قبلاً باهاش مواجه بودی
+می‌تواند دوباره برگردد. برای رفعش یا پلن رو آپگرید کن، یا یه سرویس ping (مثل
+UptimeRobot) رو هر چند دقیقه به آدرس سرویس بزن تا نخوابه.
 
 نکته‌ی دیگر: تا ۶ ربات مختلف می‌توانند هم‌زمان اجرا شوند و همه به همین یک
 دیتابیس وصل می‌شوند. هر مسیر فوروارد مشخص می‌کند کدام ربات (۱ تا ۶) مسئول
@@ -40,6 +47,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 
+from aiohttp import web
 from postgrest.exceptions import APIError
 from supabase import create_client, Client
 
@@ -93,6 +101,11 @@ OWNERS: list[int] = [
     int(part) for part in _owners_raw.split(",") if part.strip().lstrip("-").isdigit()
 ]
 
+WEBHOOK_URL: str = os.environ.get("WEBHOOK_URL", "").strip().rstrip("/")
+
+# Render پورت واقعی را از طریق متغیر PORT تزریق می‌کند.
+PORT: int = int(os.environ.get("PORT", "8443"))
+
 SUPABASE_URL: str = os.environ.get("SUPABASE_URL", "").strip()
 SUPABASE_KEY: str = os.environ.get("SUPABASE_KEY", "").strip()
 
@@ -101,6 +114,9 @@ if not BOT_TOKENS:
     sys.exit(1)
 if not OWNERS:
     log.critical("متغیر محیطی ADMINS تنظیم نشده یا نامعتبر است.")
+    sys.exit(1)
+if not WEBHOOK_URL:
+    log.critical("متغیر محیطی WEBHOOK_URL تنظیم نشده است.")
     sys.exit(1)
 if not SUPABASE_URL or not SUPABASE_KEY:
     log.critical(
@@ -1198,23 +1214,48 @@ async def run_all_bots() -> None:
     for i, token in enumerate(BOT_TOKENS[1:], start=2):
         apps.append(build_worker_app(token, bot_slot=i))
 
+    # هر ربات مسیر وبهوکِ خودش را دارد (بر پایه‌ی توکن خودش، که تصادفی و
+    # حدس‌نزدنی است) و همه روی یک پورت مشترک (همان که Render می‌دهد) جواب
+    # می‌دهند؛ یک وب‌سرور aiohttp این آپدیت‌ها را به Application درست هدایت می‌کند.
+    web_app = web.Application()
+
+    def make_handler(app: Application):
+        async def handle(request: web.Request) -> web.Response:
+            data = await request.json()
+            update = Update.de_json(data, app.bot)
+            await app.update_queue.put(update)
+            return web.Response()
+        return handle
+
     for i, app in enumerate(apps, start=1):
         await app.initialize()
         await app.start()
-        await app.updater.start_polling(
+        path = f"/{app.bot.token}"
+        web_app.router.add_post(path, make_handler(app))
+        webhook_url = f"{WEBHOOK_URL}{path}"
+        await app.bot.set_webhook(
+            url=webhook_url,
             allowed_updates=Update.ALL_TYPES,
             drop_pending_updates=True,
         )
-        log.info("✅ ربات #%s آماده و در حال polling است...", i)
+        log.info("✅ ربات #%s وبهوکش تنظیم شد و آماده‌ی دریافت است...", i)
 
-    log.info("🚀 همه‌ی %s ربات با موفقیت اجرا شدند. (فقط ربات #۱ پنل مدیریت دارد)", len(apps))
+    runner = web.AppRunner(web_app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
+
+    log.info(
+        "🚀 همه‌ی %s ربات با موفقیت اجرا شدند روی پورت %s (webhook mode | فقط ربات #۱ پنل مدیریت دارد)",
+        len(apps), PORT,
+    )
 
     try:
         await asyncio.Event().wait()  # تا وقتی سرویس زنده است، همینجا منتظر می‌مانیم
     finally:
+        await runner.cleanup()
         for app in apps:
             try:
-                await app.updater.stop()
                 await app.stop()
                 await app.shutdown()
             except Exception as e:
@@ -1224,7 +1265,7 @@ async def run_all_bots() -> None:
 def main() -> None:
     init_db()
     log.info(
-        "🚀 Bot starting (Python 3.14 | PTB 22.7+ | Polling mode | %s ربات پیکربندی‌شده)...",
+        "🚀 Bot starting (Python 3.14 | PTB 22.7+ | Webhook mode | %s ربات پیکربندی‌شده)...",
         len(BOT_TOKENS),
     )
     asyncio.run(run_all_bots())
