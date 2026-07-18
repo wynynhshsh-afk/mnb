@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
+    <title>{% block title %}NexoSelf — سلف‌بات پیشرفته تلگرام{% endblock %}</title>
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='logo.png') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    {% block extra_head %}{% endblock %}
+</head>
+<body>
+    <!-- ============================================================
+    NAVBAR
+    ============================================================ -->
+    <nav class="navbar" id="mainNav">
+        <div class="container nav-container">
+            <div class="nav-brand" onclick="window.location.href='{{ url_for('index') }}'">
+                <img src="{{ url_for('static', filename='logo.png') }}" alt="NexoSelf" height="40" class="nav-logo">
+                <span class="nav-brand-text">Nexo<span>Self</span></span>
+                <span class="nav-badge">v2.0</span>
+            </div>
+
+            <button class="nav-toggle" id="navToggle" aria-label="منو">
+                <span></span><span></span><span></span>
+            </button>
+
+            <ul class="nav-links" id="navLinks">
+                {% if session.get('owner_id') %}
+                    <li><a href="{{ url_for('index') }}" class="active">📊 پنل مدیریت</a></li>
+                    <li><a href="#" onclick="logout()" class="nav-logout">🚪 خروج</a></li>
+                {% else %}
+                    <li><a href="{{ url_for('index') }}">🏠 خانه</a></li>
+                    <li><a href="{{ url_for('panel_login_page') }}">🔐 ورود</a></li>
+                    <li><a href="{{ url_for('register_page') }}" class="btn-primary-nav">✨ ثبت‌نام</a></li>
+                {% endif %}
+            </ul>
+        </div>
+    </nav>
+
+    <!-- ============================================================
+    MAIN CONTENT
+    ============================================================ -->
+    <main>
+        {% block content %}{% endblock %}
+    </main>
+
+    <!-- ============================================================
+    FOOTER
+    ============================================================ -->
+    <footer class="footer" id="mainFooter">
+        <div class="container">
+            <div class="footer-grid">
+                <div class="footer-brand">
+                    <img src="{{ url_for('static', filename='logo.png') }}" alt="NexoSelf" height="32">
+                    <p>قدرتمندترین سلف‌بات فارسی برای تلگرام با پنل مدیریت حرفه‌ای.</p>
+                    <div class="footer-social">
+                        <a href="https://t.me/Amele55" target="_blank" class="social-link">✈️</a>
+                        <a href="https://github.com" target="_blank" class="social-link">🐙</a>
+                    </div>
+                </div>
+                <div class="footer-col">
+                    <h5>دسترسی سریع</h5>
+                    <a href="{{ url_for('index') }}#features">قابلیت‌ها</a>
+                    <a href="{{ url_for('index') }}#commands">دستورات</a>
+                    <a href="{{ url_for('index') }}#tokens">توکن</a>
+                </div>
+                <div class="footer-col">
+                    <h5>پشتیبانی</h5>
+                    <a href="https://t.me/Amele55" target="_blank">@Amele55</a>
+                    <a href="https://t.me/ll_x_yasi" target="_blank">@ll_x_yasi</a>
+                    <a href="{{ url_for('panel_login_page') }}">ورود به پنل</a>
+                    <a href="{{ url_for('register_page') }}">ثبت‌نام</a>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <span>ساخته شده با <span class="heart">❤️</span> توسط <strong>@Amele55</strong></span>
+                <span>NexoSelf v2.0 — تمامی حقوق محفوظ است</span>
+            </div>
+        </div>
+    </footer>
+
+    <!-- ============================================================
+    SCRIPTS
+    ============================================================ -->
+    <script>
+        // Navbar Toggle
+        document.getElementById('navToggle')?.addEventListener('click', function() {
+            document.getElementById('navLinks').classList.toggle('open');
+            this.classList.toggle('open');
+        });
+
+        // Close menu on link click
+        document.querySelectorAll('.nav-links a').forEach(link => {
+            link.addEventListener('click', () => {
+                document.getElementById('navLinks')?.classList.remove('open');
+                document.getElementById('navToggle')?.classList.remove('open');
+            });
+        });
+
+        // Navbar scroll effect
+        const nav = document.getElementById('mainNav');
+        window.addEventListener('scroll', () => {
+            if (window.scrollY > 60) {
+                nav?.classList.add('scrolled');
+            } else {
+                nav?.classList.remove('scrolled');
+            }
+        });
+
+        // Toast notification
+        function showToast(message, type = 'success') {
+            const toast = document.createElement('div');
+            toast.className = `toast toast-${type}`;
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.classList.add('show'), 50);
+            setTimeout(() => {
+                toast.classList.remove('show');
+                setTimeout(() => toast.remove(), 400);
+            }, 3000);
+        }
+
+        // Logout
+        async function logout() {
+            if (!confirm('آیا از خروج خود مطمئن هستید؟')) return;
+            try {
+                const res = await fetch('/api/panel-logout', { method: 'POST' });
+                if (res.ok) {
+                    window.location.href = '{{ url_for("index") }}';
+                }
+            } catch (e) {
+                window.location.href = '{{ url_for("index") }}';
+            }
+        }
+
+        // Smooth scroll for anchor links
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function(e) {
+                const href = this.getAttribute('href');
+                if (href && href.startsWith('#') && href.length > 1) {
+                    e.preventDefault();
+                    const target = document.querySelector(href);
+                    if (target) {
+                        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }
+                }
+            });
+        });
+    </script>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>

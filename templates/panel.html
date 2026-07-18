@@ -1,0 +1,1773 @@
+{% extends "base.html" %}
+
+{% block title %}پنل مدیریت — NexoSelf{% endblock %}
+
+{% block extra_head %}
+<style>
+    /* ─── Panel Layout ───────────────────────────────────────────────────── */
+    .panel-wrapper {
+        display: flex;
+        min-height: 80vh;
+        padding: 20px 0;
+        gap: 24px;
+    }
+
+    /* ─── Sidebar ────────────────────────────────────────────────────────── */
+    .panel-sidebar {
+        width: 240px;
+        flex-shrink: 0;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 12px;
+        height: fit-content;
+        position: sticky;
+        top: 90px;
+        max-height: calc(100vh - 120px);
+        overflow-y: auto;
+    }
+
+    .panel-sidebar::-webkit-scrollbar {
+        width: 3px;
+    }
+
+    .panel-sidebar .sb-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 14px;
+        border-radius: var(--radius-sm);
+        color: var(--text2);
+        cursor: pointer;
+        transition: var(--transition);
+        font-size: 13px;
+        font-weight: 500;
+        border: none;
+        background: none;
+        width: 100%;
+        text-align: right;
+        font-family: inherit;
+    }
+
+    .panel-sidebar .sb-item:hover {
+        background: rgba(108, 79, 255, 0.08);
+        color: var(--text);
+    }
+
+    .panel-sidebar .sb-item.active {
+        background: rgba(108, 79, 255, 0.15);
+        color: var(--purple);
+        border-right: 3px solid var(--accent);
+    }
+
+    .panel-sidebar .sb-item .icon {
+        font-size: 16px;
+        width: 24px;
+        text-align: center;
+        flex-shrink: 0;
+    }
+
+    .panel-sidebar .sb-divider {
+        height: 1px;
+        background: var(--border);
+        margin: 8px 12px;
+    }
+
+    .panel-sidebar .sb-footer-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 14px;
+        border-radius: var(--radius-sm);
+        color: var(--text3);
+        font-size: 12px;
+        font-weight: 500;
+        border: none;
+        background: none;
+        width: 100%;
+        text-align: right;
+        font-family: inherit;
+        cursor: pointer;
+        transition: var(--transition);
+    }
+
+    .panel-sidebar .sb-footer-item:hover {
+        color: var(--text);
+        background: rgba(255, 255, 255, 0.04);
+    }
+
+    .panel-sidebar .sb-footer-item.danger {
+        color: #fca5a5;
+    }
+    .panel-sidebar .sb-footer-item.danger:hover {
+        background: rgba(239, 68, 68, 0.1);
+    }
+
+    /* ─── Content ────────────────────────────────────────────────────────── */
+    .panel-content {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .panel-section {
+        display: none;
+        animation: fade-up 0.3s ease both;
+    }
+
+    .panel-section.active {
+        display: block;
+    }
+
+    /* ─── Cards ──────────────────────────────────────────────────────────── */
+    .panel-card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 20px 24px;
+        margin-bottom: 16px;
+        transition: var(--transition);
+    }
+
+    .panel-card:hover {
+        border-color: var(--border2);
+    }
+
+    .panel-card .card-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 16px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid var(--border);
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .panel-card .card-header h3 {
+        font-size: 16px;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .panel-card .card-header .badge {
+        font-size: 11px;
+        font-weight: 600;
+        padding: 2px 10px;
+        border-radius: 100px;
+        background: rgba(108, 79, 255, 0.12);
+        color: var(--purple);
+    }
+
+    .panel-card .card-header .badge.green {
+        background: rgba(34, 197, 94, 0.12);
+        color: var(--green);
+    }
+
+    .panel-card .card-header .badge.gold {
+        background: rgba(245, 158, 11, 0.12);
+        color: var(--gold);
+    }
+
+    /* ─── Grids ──────────────────────────────────────────────────────────── */
+    .panel-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+        gap: 12px;
+    }
+
+    .panel-grid-2 {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+    }
+
+    /* ─── Toggle ─────────────────────────────────────────────────────────── */
+    .panel-toggle {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 14px;
+        background: rgba(255, 255, 255, 0.02);
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--border);
+        transition: var(--transition);
+    }
+
+    .panel-toggle:hover {
+        border-color: var(--border2);
+        background: rgba(255, 255, 255, 0.04);
+    }
+
+    .panel-toggle .label {
+        font-size: 13px;
+        color: var(--text2);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .panel-toggle .label .emoji {
+        font-size: 16px;
+    }
+
+    .tgl {
+        position: relative;
+        width: 40px;
+        height: 22px;
+        flex-shrink: 0;
+    }
+
+    .tgl input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+        position: absolute;
+    }
+
+    .tgl-s {
+        position: absolute;
+        cursor: pointer;
+        inset: 0;
+        background: var(--bg);
+        border: 1px solid var(--border2);
+        border-radius: 22px;
+        transition: all 0.3s;
+    }
+
+    .tgl-s::before {
+        content: "";
+        position: absolute;
+        height: 14px;
+        width: 14px;
+        right: 3px;
+        bottom: 3px;
+        background: var(--text3);
+        border-radius: 50%;
+        transition: all 0.3s;
+    }
+
+    .tgl input:checked+.tgl-s {
+        background: var(--blue);
+        border-color: var(--blue);
+        box-shadow: 0 0 10px rgba(41, 121, 255, 0.3);
+    }
+
+    .tgl input:checked+.tgl-s::before {
+        background: #fff;
+        right: auto;
+        left: 3px;
+    }
+
+    /* ─── Buttons ────────────────────────────────────────────────────────── */
+    .btn-group {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+
+    .btn-sm {
+        padding: 6px 16px;
+        font-size: 12px;
+        border-radius: var(--radius-sm);
+        border: none;
+        font-weight: 600;
+        cursor: pointer;
+        transition: var(--transition);
+        font-family: inherit;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .btn-sm:hover {
+        transform: translateY(-1px);
+    }
+
+    .btn-green {
+        background: var(--green);
+        color: #fff;
+    }
+    .btn-green:hover {
+        background: #16a34a;
+    }
+
+    .btn-red {
+        background: var(--red);
+        color: #fff;
+    }
+    .btn-red:hover {
+        background: #dc2626;
+    }
+
+    .btn-blue {
+        background: var(--blue);
+        color: #fff;
+    }
+    .btn-blue:hover {
+        background: #2563eb;
+    }
+
+    .btn-purple {
+        background: var(--accent);
+        color: #fff;
+    }
+    .btn-purple:hover {
+        background: #7c5fff;
+    }
+
+    .btn-gold {
+        background: var(--gold);
+        color: #000;
+    }
+    .btn-gold:hover {
+        background: #d97706;
+    }
+
+    .btn-gray {
+        background: rgba(255, 255, 255, 0.06);
+        color: var(--text2);
+        border: 1px solid var(--border);
+    }
+    .btn-gray:hover {
+        background: rgba(255, 255, 255, 0.1);
+        color: var(--text);
+    }
+
+    .btn-sm:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+        transform: none !important;
+    }
+
+    /* ─── Inputs ─────────────────────────────────────────────────────────── */
+    .panel-input {
+        width: 100%;
+        padding: 10px 14px;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid var(--border2);
+        border-radius: var(--radius-sm);
+        color: var(--text);
+        font-family: inherit;
+        font-size: 13px;
+        outline: none;
+        transition: var(--transition);
+    }
+
+    .panel-input:focus {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+
+    .panel-input::placeholder {
+        color: var(--text3);
+    }
+
+    .panel-input-sm {
+        padding: 6px 10px;
+        font-size: 12px;
+    }
+
+    .panel-row {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+    }
+
+    .panel-row .panel-input {
+        flex: 1;
+        min-width: 120px;
+    }
+
+    .panel-row .panel-input-sm {
+        flex: 0 1 auto;
+        width: auto;
+        min-width: 80px;
+    }
+
+    /* ─── Status ─────────────────────────────────────────────────────────── */
+    .status-dot {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        margin-left: 6px;
+        flex-shrink: 0;
+    }
+
+    .status-dot.on {
+        background: var(--green);
+        box-shadow: 0 0 12px rgba(34, 197, 94, 0.5);
+        animation: pulse-dot 2s infinite;
+    }
+
+    .status-dot.off {
+        background: var(--red);
+        box-shadow: 0 0 12px rgba(239, 68, 68, 0.3);
+    }
+
+    @keyframes pulse-dot {
+        0%,
+        100% {
+            box-shadow: 0 0 8px rgba(34, 197, 94, 0.3);
+        }
+        50% {
+            box-shadow: 0 0 20px rgba(34, 197, 94, 0.6);
+        }
+    }
+
+    .status-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 8px 0;
+    }
+
+    .status-row .label {
+        font-size: 13px;
+        color: var(--text2);
+    }
+
+    .status-row .value {
+        font-weight: 600;
+        font-size: 14px;
+    }
+
+    /* ─── Token Display ──────────────────────────────────────────────────── */
+    .token-display {
+        font-size: 36px;
+        font-weight: 900;
+        color: var(--gold);
+        line-height: 1.2;
+    }
+
+    .token-stats {
+        display: flex;
+        gap: 24px;
+        flex-wrap: wrap;
+        padding: 8px 0;
+    }
+
+    .token-stat {
+        text-align: center;
+    }
+
+    .token-stat .number {
+        font-size: 22px;
+        font-weight: 800;
+        color: var(--text);
+    }
+
+    .token-stat .label {
+        font-size: 12px;
+        color: var(--text3);
+        display: block;
+        margin-top: 2px;
+    }
+
+    /* ─── Lists ──────────────────────────────────────────────────────────── */
+    .list-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--border);
+        font-size: 13px;
+        color: var(--text2);
+        transition: var(--transition);
+    }
+
+    .list-item:hover {
+        background: rgba(255, 255, 255, 0.02);
+    }
+
+    .list-item:last-child {
+        border-bottom: none;
+    }
+
+    .list-item .info {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .list-item .info .id {
+        font-size: 11px;
+        color: var(--text3);
+        font-family: monospace;
+    }
+
+    .list-item .actions {
+        display: flex;
+        gap: 6px;
+    }
+
+    .list-empty {
+        padding: 20px;
+        text-align: center;
+        color: var(--text3);
+        font-size: 13px;
+    }
+
+    /* ─── Select ─────────────────────────────────────────────────────────── */
+    .panel-select {
+        padding: 10px 14px;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid var(--border2);
+        border-radius: var(--radius-sm);
+        color: var(--text);
+        font-family: inherit;
+        font-size: 13px;
+        outline: none;
+        transition: var(--transition);
+        cursor: pointer;
+        appearance: none;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238892aa' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+        background-repeat: no-repeat;
+        background-position: left 12px center;
+        padding-left: 32px;
+    }
+
+    .panel-select:focus {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+
+    /* ─── Responsive ─────────────────────────────────────────────────────── */
+    @media (max-width: 1024px) {
+        .panel-grid-2 {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    @media (max-width: 768px) {
+        .panel-wrapper {
+            flex-direction: column;
+            padding: 12px 0;
+            gap: 16px;
+        }
+
+        .panel-sidebar {
+            width: 100%;
+            position: static;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            padding: 10px 12px;
+            max-height: none;
+            overflow-y: visible;
+        }
+
+        .panel-sidebar .sb-item {
+            flex: 1;
+            min-width: 70px;
+            justify-content: center;
+            font-size: 12px;
+            padding: 8px 10px;
+            border-radius: 6px;
+        }
+
+        .panel-sidebar .sb-item .icon {
+            font-size: 14px;
+            width: 20px;
+        }
+
+        .panel-sidebar .sb-divider {
+            display: none;
+        }
+
+        .panel-sidebar .sb-footer-item {
+            display: none;
+        }
+
+        .panel-card {
+            padding: 16px;
+        }
+
+        .panel-card .card-header {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+
+        .panel-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .panel-row {
+            flex-direction: column;
+        }
+
+        .panel-row .panel-input {
+            width: 100%;
+            min-width: unset;
+        }
+
+        .btn-group {
+            flex-direction: row;
+            flex-wrap: wrap;
+        }
+
+        .btn-group .btn-sm {
+            flex: 1;
+            min-width: 80px;
+            justify-content: center;
+        }
+
+        .token-stats {
+            gap: 12px;
+        }
+
+        .token-stat .number {
+            font-size: 18px;
+        }
+    }
+
+    @media (max-width: 480px) {
+        .panel-card {
+            padding: 12px;
+        }
+
+        .panel-sidebar .sb-item {
+            font-size: 11px;
+            padding: 6px 8px;
+            min-width: 60px;
+        }
+
+        .panel-sidebar .sb-item .icon {
+            font-size: 12px;
+            width: 16px;
+        }
+
+        .token-display {
+            font-size: 28px;
+        }
+
+        .list-item {
+            font-size: 12px;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .list-item .actions {
+            width: 100%;
+            justify-content: flex-end;
+        }
+    }
+
+    /* ─── Scrollbar for sidebar ────────────────────────────────────────── */
+    @supports (scrollbar-width: thin) {
+        .panel-sidebar {
+            scrollbar-width: thin;
+            scrollbar-color: var(--border2) transparent;
+        }
+    }
+
+    /* ─── Animations ────────────────────────────────────────────────────── */
+    @keyframes slide-down {
+        from {
+            opacity: 0;
+            transform: translateY(-10px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    .panel-section.active {
+        animation: slide-down 0.3s ease both;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="panel-wrapper">
+
+        <!-- ============================================================
+        SIDEBAR
+        ============================================================ -->
+        <aside class="panel-sidebar" id="panelSidebar">
+            <button class="sb-item active" data-section="dashboard">
+                <span class="icon">📊</span> داشبورد
+            </button>
+            <button class="sb-item" data-section="main">
+                <span class="icon">⚙️</span> اصلی
+            </button>
+            <button class="sb-item" data-section="lists">
+                <span class="icon">📋</span> لیست‌ها
+            </button>
+            <button class="sb-item" data-section="security">
+                <span class="icon">🛡️</span> امنیت
+            </button>
+            <button class="sb-item" data-section="automation">
+                <span class="icon">🔄</span> اتوماسیون
+            </button>
+            <button class="sb-item" data-section="tools">
+                <span class="icon">🔧</span> ابزار
+            </button>
+            <button class="sb-item" data-section="settings">
+                <span class="icon">⚙️</span> تنظیمات
+            </button>
+
+            <div class="sb-divider"></div>
+
+            <button class="sb-footer-item" onclick="window.location.href='{{ url_for('index') }}'">
+                🏠 بازگشت به خانه
+            </button>
+            <button class="sb-footer-item danger" onclick="tgLogout()">
+                🔌 قطع تلگرام
+            </button>
+            <button class="sb-footer-item danger" onclick="panelLogout()">
+                🚪 خروج از حساب
+            </button>
+        </aside>
+
+        <!-- ============================================================
+        CONTENT
+        ============================================================ -->
+        <div class="panel-content">
+
+            <!-- ============================================================
+            DASHBOARD
+            ============================================================ -->
+            <div class="panel-section active" id="sec-dashboard">
+
+                <!-- Status Card -->
+                <div class="panel-card">
+                    <div class="card-header">
+                        <h3>📊 وضعیت سلف‌بات</h3>
+                        <span class="badge {{ 'green' if status.self_bot_active == '1' else '' }}">
+                            {{ 'فعال' if status.self_bot_active == '1' else 'غیرفعال' }}
+                        </span>
+                    </div>
+
+                    <div class="status-row">
+                        <span class="status-dot {{ 'on' if status.self_bot_active == '1' else 'off' }}" id="statusDot"></span>
+                        <span class="value" id="statusText">{{ 'فعال' if status.self_bot_active == '1' else 'غیرفعال' }}</span>
+                        <span class="label">وضعیت سلف</span>
+                    </div>
+
+                    <div class="btn-group" style="margin-top:12px;">
+                        <button class="btn-sm btn-green" onclick="startBot()">▶️ روشن کردن</button>
+                        <button class="btn-sm btn-red" onclick="stopBot()">⏹ خاموش کردن</button>
+                        <button class="btn-sm btn-gray" onclick="showStatus()">📊 وضعیت</button>
+                    </div>
+                </div>
+
+                <!-- Token Card -->
+                <div class="panel-card">
+                    <div class="card-header">
+                        <h3>🪙 مدیریت توکن</h3>
+                        <span class="badge gold">💰 {{ token_data.balance|default(0) }} توکن</span>
+                    </div>
+
+                    <div class="token-stats">
+                        <div class="token-stat">
+                            <div class="token-display" id="tokenBalance">{{ token_data.balance|default(0) }}</div>
+                            <span class="label">موجودی فعلی</span>
+                        </div>
+                        <div class="token-stat">
+                            <div class="number" id="tokenTotal">{{ token_data.total_earned|default(0) }}</div>
+                            <span class="label">کل دریافتی</span>
+                        </div>
+                        <div class="token-stat">
+                            <div class="number" id="tokenRefs">{{ token_data.ref_count|default(0) }}</div>
+                            <span class="label">تعداد رفرال</span>
+                        </div>
+                    </div>
+
+                    <div class="btn-group" style="margin-top:12px;">
+                        <button class="btn-sm btn-gold" id="dailyBtn" onclick="claimDaily()">🎁 هدیه روزانه</button>
+                        <button class="btn-sm btn-purple" onclick="copyReferral()">🔗 کپی لینک رفرال</button>
+                        <button class="btn-sm btn-blue" onclick="buyTokens()">🛒 خرید توکن</button>
+                    </div>
+
+                    <div style="margin-top:12px;padding:10px 14px;background:rgba(245,158,11,0.06);border-radius:var(--radius-sm);font-size:12px;color:var(--text3);">
+                        ⚡ هر جلسه <strong style="color:var(--gold);">{{ config.TOKENS_PER_SESSION|default(2) }}</strong> توکن = 
+                        <strong style="color:var(--gold);">{{ config.SESSION_HOURS|default(2) }}</strong> ساعت &nbsp;|&nbsp;
+                        🎁 هدیه روزانه <strong style="color:var(--gold);">{{ config.DAILY_TOKEN_GIFT|default(10) }}</strong> توکن &nbsp;|&nbsp;
+                        🔗 هر رفرال <strong style="color:var(--gold);">{{ config.REFERRAL_TOKENS|default(12) }}</strong> توکن
+                    </div>
+                </div>
+
+                <!-- Quick Actions -->
+                <div class="panel-card">
+                    <div class="card-header">
+                        <h3>⚡ دسترسی سریع</h3>
+                    </div>
+                    <div class="panel-grid">
+                        <button class="btn-sm btn-blue" onclick="switchSection('main')">⚙️ تنظیمات اصلی</button>
+                        <button class="btn-sm btn-purple" onclick="switchSection('lists')">📋 لیست‌ها</button>
+                        <button class="btn-sm btn-green" onclick="switchSection('security')">🛡️ امنیت</button>
+                        <button class="btn-sm btn-gray" onclick="switchSection('settings')">⚙️ تنظیمات پیشرفته</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ============================================================
+            MAIN
+            ============================================================ -->
+            <div class="panel-section" id="sec-main">
+
+                <!-- Core Features -->
+                <div class="panel-card">
+                    <div class="card-header">
+                        <h3>⚙️ کنترل اصلی</h3>
+                        <span class="badge">مدیریت核心</span>
+                    </div>
+                    <div class="panel-grid">
+                        <div class="panel-toggle">
+                            <span class="label"><span class="emoji">🤖</span> منشی</span>
+                            <label class="tgl">
+                                <input type="checkbox" id="tog-secretary_active" {{ 'checked' if status.secretary_active == '1' else '' }} onchange="toggleFeature('secretary_active', this)">
+                                <span class="tgl-s"></span>
+                            </label>
+                        </div>
+                        <div class="panel-toggle">
+                            <span class="label"><span class="emoji">👁️</span> سین خودکار</span>
+                            <label class="tgl">
+                                <input type="checkbox" id="tog-auto_seen_active" {{ 'checked' if status.auto_seen_active == '1' else '' }} onchange="toggleFeature('auto_seen_active', this)">
+                                <span class="tgl-s"></span>
+                            </label>
+                        </div>
+                        <div class="panel-toggle">
+                            <span class="label"><span class="emoji">❤️</span> ری‌اکشن</span>
+                            <label class="tgl">
+                                <input type="checkbox" id="tog-auto_reaction_active" {{ 'checked' if status.auto_reaction_active == '1' else '' }} onchange="toggleFeature('auto_reaction_active', this)">
+                                <span class="tgl-s"></span>
+                            </label>
+                        </div>
+                        <div class="panel-toggle">
+                            <span class="label"><span class="emoji">💾</span> ذخیره مدیا</span>
+                            <label class="tgl">
+                                <input type="checkbox" id="tog-auto_save_media" {{ 'checked' if status.auto_save_media == '1' else '' }} onchange="toggleFeature('auto_save_media', this)">
+                                <span class="tgl-s"></span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Clock -->
+                <div class="panel-card">
+                    <div class="card-header">
+                        <h3>⏰ ساعت در نام و بیو</h3>
+                        <span class="badge">با فونت</span>
+                    </div>
+                    <div class="panel-grid">
+                        <div class="panel-toggle">
+                            <span class="label"><span class="emoji">📛</span> ساعت در نام</span>
+                            <label class="tgl">
+                                <input type="checkbox" id="tog-clock_name_active" {{ 'checked' if status.clock_name_active == '1' else '' }} onchange="toggleFeature('clock_name_active', this)">
+                                <span class="tgl-s"></span>
+                            </label>
+                        </div>
+                        <div class="panel-toggle">
+                            <span class="label"><span class="emoji">📝</span> ساعت در بیو</span>
+                            <label class="tgl">
+                                <input type="checkbox" id="tog-clock_bio_active" {{ 'checked' if status.clock_bio_active == '1' else '' }} onchange="toggleFeature('clock_bio_active', this)">
+                                <span class="tgl-s"></span>
+                            </label>
+                        </div>
+                    </div>
+                    <div style="margin-top:12px;font-size:12px;color:var(--text3);">
+                        💡 فونت انتخابی روی ساعت اعمال می‌شود. فونت فعلی: <strong style="color:var(--text);">{{ status.selected_font|default('۰') }}</strong>
+                    </div>
+                </div>
+
+                <!-- Secretary Message -->
+                <div class="panel-card">
+                    <div class="card-header">
+                        <h3>💬 پیام منشی</h3>
+                        <span class="badge">خودکار</span>
+                    </div>
+                    <div class="panel-row">
+                        <input type="text" id="secMsgInline" class="panel-input" placeholder="پیام منشی..." value="{{ status.secretary_message|default('') }}">
+                        <button class="btn-sm btn-blue" onclick="saveSecretaryInline()">💾 ذخیره</button>
+                    </div>
+                    <div style="margin-top:8px;font-size:12px;color:var(--text3);">
+                        ⏱ هر کاربر فقط هر ۲۴ ساعت یک بار پاسخ می‌گیرد.
+                    </div>
+                </div>
+            </div>
+
+            <!-- ============================================================
+            LISTS
+            ============================================================ -->
+            <div class="panel-section" id="sec-lists">
+
+                <!-- Enemies -->
+                <div class="panel-card">
+                    <div class="card-header">
+                        <h3>🔴 لیست دشمن</h3>
+                        <span class="badge" id="enemyCount">{{ enemies|length }}</span>
+                    </div>
+                    <div class="panel-row" style="margin-bottom:12px;">
+                        <input type="number" id="enemyId" class="panel-input" placeholder="آیدی عددی" dir="ltr">
+                        <input type="text" id="enemyName" class="panel-input" placeholder="نام (اختیاری)">
+                        <button class="btn-sm btn-blue" onclick="addEnemy()">➕ افزودن</button>
+                        <button class="btn-sm btn-red" onclick="clearEnemies()">🗑️ پاک همه</button>
+                    </div>
+                    <div id="enemyList">
+                        {% if enemies %}
+                            {% for e in enemies %}
+                            <div class="list-item">
+                                <div class="info">
+                                    {{ e.name or e.username or e.user_id }}
+                                    <span class="id">{{ e.user_id }}</span>
+                                </div>
+                                <div class="actions">
+                                    <button class="btn-sm btn-red" onclick="deleteEnemy({{ e.user_id }})">حذف</button>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        {% else %}
+                            <div class="list-empty">📭 لیست دشمن خالی است</div>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <!-- Friends -->
+                <div class="panel-card">
+                    <div class="card-header">
+                        <h3>💚 لیست دوست</h3>
+                        <span class="badge green" id="friendCount">{{ friends|length }}</span>
+                    </div>
+                    <div class="panel-row" style="margin-bottom:12px;">
+                        <input type="number" id="friendId" class="panel-input" placeholder="آیدی عددی" dir="ltr">
+                        <input type="text" id="friendName" class="panel-input" placeholder="نام (اختیاری)">
+                        <button class="btn-sm btn-blue" onclick="addFriend()">➕ افزودن</button>
+                        <button class="btn-sm btn-red" onclick="clearFriends()">🗑️ پاک همه</button>
+                    </div>
+                    <div id="friendList">
+                        {% if friends %}
+                            {% for f in friends %}
+                            <div class="list-item">
+                                <div class="info">
+                                    {{ f.name or f.username or f.user_id }}
+                                    <span class="id">{{ f.user_id }}</span>
+                                </div>
+                                <div class="actions">
+                                    <button class="btn-sm btn-red" onclick="deleteFriend({{ f.user_id }})">حذف</button>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        {% else %}
+                            <div class="list-empty">📭 لیست دوست خالی است</div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <!-- ============================================================
+            SECURITY
+            ============================================================ -->
+            <div class="panel-section" id="sec-security">
+                <div class="panel-card">
+                    <div class="card-header">
+                        <h3>🛡️ تنظیمات امنیتی</h3>
+                        <span class="badge">۴ لایه</span>
+                    </div>
+                    <div class="panel-grid">
+                        <div class="panel-toggle">
+                            <span class="label"><span class="emoji">🛡️</span> ضد حذف</span>
+                            <label class="tgl">
+                                <input type="checkbox" id="tog-anti_delete_active" {{ 'checked' if status.anti_delete_active == '1' else '' }} onchange="toggleFeature('anti_delete_active', this)">
+                                <span class="tgl-s"></span>
+                            </label>
+                        </div>
+                        <div class="panel-toggle">
+                            <span class="label"><span class="emoji">🔗</span> ضد لینک</span>
+                            <label class="tgl">
+                                <input type="checkbox" id="tog-anti_link_active" {{ 'checked' if status.anti_link_active == '1' else '' }} onchange="toggleFeature('anti_link_active', this)">
+                                <span class="tgl-s"></span>
+                            </label>
+                        </div>
+                        <div class="panel-toggle">
+                            <span class="label"><span class="emoji">🔒</span> قفل پیوی</span>
+                            <label class="tgl">
+                                <input type="checkbox" id="tog-private_lock_active" {{ 'checked' if status.private_lock_active == '1' else '' }} onchange="toggleFeature('private_lock_active', this)">
+                                <span class="tgl-s"></span>
+                            </label>
+                        </div>
+                        <div class="panel-toggle">
+                            <span class="label"><span class="emoji">⚔️</span> پاسخ دشمن</span>
+                            <label class="tgl">
+                                <input type="checkbox" id="tog-enemy_reply_active" {{ 'checked' if status.enemy_reply_active == '1' else '' }} onchange="toggleFeature('enemy_reply_active', this)">
+                                <span class="tgl-s"></span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Silent -->
+                <div class="panel-card">
+                    <div class="card-header">
+                        <h3>🔇 سایلنت</h3>
+                        <span class="badge">نادیده گرفتن</span>
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:10px;">
+                        <div class="panel-row">
+                            <input type="number" id="silentChatId" class="panel-input" placeholder="آیدی چت" dir="ltr">
+                            <button class="btn-sm btn-blue" onclick="addSilentChat()">🔇 سایلنت چت</button>
+                            <button class="btn-sm btn-gray" onclick="removeSilentChat()">🔔 لغو سایلنت</button>
+                        </div>
+                        <div class="panel-row">
+                            <input type="number" id="silentUserId" class="panel-input" placeholder="آیدی کاربر" dir="ltr">
+                            <button class="btn-sm btn-blue" onclick="addSilentUser()">🔇 سایلنت کاربر</button>
+                            <button class="btn-sm btn-gray" onclick="removeSilentUser()">🔔 لغو سایلنت</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ============================================================
+            AUTOMATION
+            ============================================================ -->
+            <div class="panel-section" id="sec-automation">
+                <div class="panel-card">
+                    <div class="card-header">
+                        <h3>🔄 اتوماسیون</h3>
+                        <span class="badge">خودکار</span>
+                    </div>
+                    <div class="panel-grid">
+                        <div class="panel-toggle">
+                            <span class="label"><span class="emoji">👁️</span> سین خودکار</span>
+                            <label class="tgl">
+                                <input type="checkbox" id="tog-auto_seen_active" {{ 'checked' if status.auto_seen_active == '1' else '' }} onchange="toggleFeature('auto_seen_active', this)">
+                                <span class="tgl-s"></span>
+                            </label>
+                        </div>
+                        <div class="panel-toggle">
+                            <span class="label"><span class="emoji">❤️</span> ری‌اکشن خودکار</span>
+                            <label class="tgl">
+                                <input type="checkbox" id="tog-auto_reaction_active" {{ 'checked' if status.auto_reaction_active == '1' else '' }} onchange="toggleFeature('auto_reaction_active', this)">
+                                <span class="tgl-s"></span>
+                            </label>
+                        </div>
+                        <div class="panel-toggle">
+                            <span class="label"><span class="emoji">💾</span> ذخیره مدیا</span>
+                            <label class="tgl">
+                                <input type="checkbox" id="tog-auto_save_media" {{ 'checked' if status.auto_save_media == '1' else '' }} onchange="toggleFeature('auto_save_media', this)">
+                                <span class="tgl-s"></span>
+                            </label>
+                        </div>
+                        <div class="panel-toggle">
+                            <span class="label"><span class="emoji">📛</span> ساعت نام</span>
+                            <label class="tgl">
+                                <input type="checkbox" id="tog-clock_name_active" {{ 'checked' if status.clock_name_active == '1' else '' }} onchange="toggleFeature('clock_name_active', this)">
+                                <span class="tgl-s"></span>
+                            </label>
+                        </div>
+                        <div class="panel-toggle">
+                            <span class="label"><span class="emoji">📝</span> ساعت بیو</span>
+                            <label class="tgl">
+                                <input type="checkbox" id="tog-clock_bio_active" {{ 'checked' if status.clock_bio_active == '1' else '' }} onchange="toggleFeature('clock_bio_active', this)">
+                                <span class="tgl-s"></span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Reaction Emoji -->
+                <div class="panel-card">
+                    <div class="card-header">
+                        <h3>❤️ ری‌اکشن پیش‌فرض</h3>
+                    </div>
+                    <div class="panel-row">
+                        <input type="text" id="reactionEmoji" class="panel-input" value="{{ status.auto_reaction_emoji|default('❤️') }}" style="max-width:150px;">
+                        <button class="btn-sm btn-blue" onclick="saveReaction()">💾 ذخیره</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ============================================================
+            TOOLS
+            ============================================================ -->
+            <div class="panel-section" id="sec-tools">
+                <div class="panel-card">
+                    <div class="card-header">
+                        <h3>🔧 ابزارها</h3>
+                        <span class="badge">مفید</span>
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:12px;">
+                        <div class="panel-row">
+                            <input type="text" id="toolTranslate" class="panel-input" placeholder="ترجمه [متن]">
+                            <button class="btn-sm btn-blue" onclick="runTool('translate')">🌐 ترجمه</button>
+                        </div>
+                        <div class="panel-row">
+                            <input type="text" id="toolWeather" class="panel-input" placeholder="هوا [شهر]">
+                            <button class="btn-sm btn-blue" onclick="runTool('weather')">⛅ هوا</button>
+                        </div>
+                        <div class="panel-row">
+                            <input type="text" id="toolCurrency" class="panel-input" placeholder="ارز [دلار/تتر/یورو/پوند/بیت‌کوین]">
+                            <button class="btn-sm btn-blue" onclick="runTool('currency')">💰 قیمت</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Spam -->
+                <div class="panel-card">
+                    <div class="card-header">
+                        <h3>💣 اسپم</h3>
+                        <span class="badge">با احتیاط</span>
+                    </div>
+                    <div class="panel-row" style="margin-bottom:8px;">
+                        <input type="number" id="spamCount" class="panel-input panel-input-sm" placeholder="تعداد" value="5" min="1" max="50" style="max-width:100px;">
+                        <input type="text" id="spamText" class="panel-input" placeholder="متن پیام">
+                        <button class="btn-sm btn-red" onclick="startSpam()">✈️ ارسال</button>
+                        <button class="btn-sm btn-gray" onclick="stopSpam()">⏹ توقف</button>
+                    </div>
+                    <div style="font-size:12px;color:var(--text3);">
+                        ⚠️ تأخیر بین پیام‌ها: <strong id="spamDelayDisplay">{{ status.spam_delay|default(2) }}</strong> ثانیه
+                    </div>
+                </div>
+
+                <!-- Save Media -->
+                <div class="panel-card">
+                    <div class="card-header">
+                        <h3>📥 سیو مدیا</h3>
+                        <span class="badge">کانال</span>
+                    </div>
+                    <div class="panel-row">
+                        <input type="text" id="saveChannel" class="panel-input" placeholder="@یوزرنیم یا لینک پست">
+                        <input type="number" id="saveCount" class="panel-input panel-input-sm" placeholder="تعداد" value="50" min="1" max="500" style="max-width:100px;">
+                        <button class="btn-sm btn-blue" onclick="startSave()">📥 شروع</button>
+                        <button class="btn-sm btn-red" onclick="stopSave()">⏹ توقف</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ============================================================
+            SETTINGS
+            ============================================================ -->
+            <div class="panel-section" id="sec-settings">
+                <div class="panel-card">
+                    <div class="card-header">
+                        <h3>⚙️ تنظیمات پیشرفته</h3>
+                        <span class="badge">مدیریت</span>
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:16px;">
+                        <!-- Font -->
+                        <div>
+                            <label style="font-size:13px;color:var(--text2);display:block;margin-bottom:4px;">🔤 فونت پیام‌ها</label>
+                            <select id="fontSelect" class="panel-select" style="max-width:280px;">
+                                <option value="0" {{ 'selected' if status.selected_font == '0' else '' }}>۰ — متن عادی</option>
+                                <option value="1" {{ 'selected' if status.selected_font == '1' else '' }}>۱ — Bold Sans</option>
+                                <option value="2" {{ 'selected' if status.selected_font == '2' else '' }}>۲ — Italic Sans</option>
+                                <option value="3" {{ 'selected' if status.selected_font == '3' else '' }}>۳ — Monospace</option>
+                                <option value="4" {{ 'selected' if status.selected_font == '4' else '' }}>۴ — Fullwidth</option>
+                                <option value="5" {{ 'selected' if status.selected_font == '5' else '' }}>۵ — Serif Bold</option>
+                                <option value="6" {{ 'selected' if status.selected_font == '6' else '' }}>۶ — Script</option>
+                                <option value="7" {{ 'selected' if status.selected_font == '7' else '' }}>۷ — Strikethrough</option>
+                                <option value="8" {{ 'selected' if status.selected_font == '8' else '' }}>۸ — Underline</option>
+                            </select>
+                        </div>
+
+                        <!-- Spam Delay -->
+                        <div>
+                            <label style="font-size:13px;color:var(--text2);display:block;margin-bottom:4px;">💣 تأخیر اسپم (ثانیه)</label>
+                            <input type="number" id="spamDelay" class="panel-input" value="{{ status.spam_delay|default(2) }}" style="max-width:150px;" min="1" max="60">
+                        </div>
+
+                        <!-- Secretary Message -->
+                        <div>
+                            <label style="font-size:13px;color:var(--text2);display:block;margin-bottom:4px;">🤖 پیام منشی</label>
+                            <textarea id="secretaryMsg" class="panel-input" rows="3" placeholder="متن پیام خودکار منشی...">{{ status.secretary_message|default('') }}</textarea>
+                        </div>
+
+                        <!-- Reaction Emoji -->
+                        <div>
+                            <label style="font-size:13px;color:var(--text2);display:block;margin-bottom:4px;">❤️ ری‌اکشن پیش‌فرض</label>
+                            <input type="text" id="reactionEmoji" class="panel-input" value="{{ status.auto_reaction_emoji|default('❤️') }}" style="max-width:150px;">
+                        </div>
+
+                        <button class="btn-sm btn-green" onclick="saveAllSettings()" style="padding:10px 20px;font-size:14px;">💾 ذخیره همه تنظیمات</button>
+                    </div>
+                </div>
+            </div>
+
+        </div><!-- /panel-content -->
+    </div><!-- /panel-wrapper -->
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // ============================================================
+    // STATE
+    // ============================================================
+    const currentSettings = {{ status|tojson }};
+    let tokenData = {{ token_data|tojson }};
+    let enemies = {{ enemies|tojson }};
+    let friends = {{ friends|tojson }};
+
+    // ============================================================
+    // SIDEBAR NAVIGATION
+    // ============================================================
+    document.querySelectorAll('.panel-sidebar .sb-item').forEach(btn => {
+        btn.addEventListener('click', function() {
+            document.querySelectorAll('.panel-sidebar .sb-item').forEach(b => b.classList.remove('active'));
+            this.classList.add('active');
+            const section = this.dataset.section;
+            switchSection(section);
+        });
+    });
+
+    function switchSection(section) {
+        document.querySelectorAll('.panel-section').forEach(s => s.classList.remove('active'));
+        const target = document.getElementById('sec-' + section);
+        if (target) target.classList.add('active');
+
+        document.querySelectorAll('.panel-sidebar .sb-item').forEach(b => {
+            b.classList.toggle('active', b.dataset.section === section);
+        });
+
+        // Close mobile sidebar if open
+        const sidebar = document.getElementById('panelSidebar');
+        if (sidebar) sidebar.style.display = '';
+    }
+
+    // ============================================================
+    // TOGGLE FEATURE
+    // ============================================================
+    async function toggleFeature(key, checkbox) {
+        try {
+            const res = await fetch('/api/toggle/' + key, { method: 'POST' });
+            const data = await res.json();
+            if (!data.ok) {
+                showToast('خطا', 'error');
+                if (checkbox) checkbox.checked = !checkbox.checked;
+                return;
+            }
+            currentSettings[key] = data.active ? '1' : '0';
+            if (checkbox) checkbox.checked = data.active;
+            showToast(data.active ? '✅ ' + getLabel(key) + ' روشن شد' : '❌ ' + getLabel(key) + ' خاموش شد', data.active ? 'success' : 'info');
+            updateStatusDot();
+        } catch (e) {
+            showToast('خطا در اتصال', 'error');
+        }
+    }
+
+    function getLabel(key) {
+        const labels = {
+            secretary_active: 'منشی',
+            anti_delete_active: 'ضد حذف',
+            anti_link_active: 'ضد لینک',
+            auto_seen_active: 'سین خودکار',
+            auto_reaction_active: 'ری‌اکشن',
+            private_lock_active: 'قفل پیوی',
+            enemy_reply_active: 'پاسخ دشمن',
+            auto_save_media: 'ذخیره مدیا',
+            clock_name_active: 'ساعت نام',
+            clock_bio_active: 'ساعت بیو'
+        };
+        return labels[key] || key;
+    }
+
+    // ============================================================
+    // START / STOP BOT
+    // ============================================================
+    async function startBot() {
+        try {
+            const data = await (await fetch('/api/start', { method: 'POST' })).json();
+            if (data.ok) {
+                currentSettings.self_bot_active = '1';
+                updateStatusDot();
+                showToast(data.message || '✅ سلف روشن شد', 'success');
+                loadTokens();
+            } else {
+                showToast(data.error || 'خطا', 'error');
+            }
+        } catch (e) {
+            showToast('خطا در اتصال', 'error');
+        }
+    }
+
+    async function stopBot() {
+        try {
+            const data = await (await fetch('/api/stop', { method: 'POST' })).json();
+            if (data.ok) {
+                currentSettings.self_bot_active = '0';
+                updateStatusDot();
+                showToast('⏹ سلف خاموش شد', 'info');
+            }
+        } catch (e) {
+            showToast('خطا در اتصال', 'error');
+        }
+    }
+
+    function showStatus() {
+        const status = currentSettings.self_bot_active === '1' ? 'فعال' : 'غیرفعال';
+        showToast('وضعیت سلف: ' + status, 'info');
+    }
+
+    function updateStatusDot() {
+        const dot = document.getElementById('statusDot');
+        const txt = document.getElementById('statusText');
+        const on = currentSettings.self_bot_active === '1';
+        if (dot) {
+            dot.className = 'status-dot ' + (on ? 'on' : 'off');
+        }
+        if (txt) {
+            txt.textContent = on ? 'فعال' : 'غیرفعال';
+        }
+        // Update badge
+        const badge = document.querySelector('.panel-card:first-child .badge');
+        if (badge) {
+            badge.textContent = on ? 'فعال' : 'غیرفعال';
+            badge.className = 'badge ' + (on ? 'green' : '');
+        }
+    }
+
+    // ============================================================
+    // TOKENS
+    // ============================================================
+    async function loadTokens() {
+        try {
+            const res = await fetch('/api/tokens');
+            if (res.ok) {
+                tokenData = await res.json();
+                document.getElementById('tokenBalance').textContent = tokenData.balance ?? 0;
+                document.getElementById('tokenTotal').textContent = tokenData.total_earned ?? 0;
+                document.getElementById('tokenRefs').textContent = tokenData.ref_count ?? 0;
+                // Update badge
+                const badge = document.querySelector('.panel-card:nth-child(2) .badge');
+                if (badge) {
+                    badge.textContent = '💰 ' + (tokenData.balance ?? 0) + ' توکن';
+                }
+            }
+        } catch (e) {}
+    }
+
+    async function claimDaily() {
+        try {
+            const data = await (await fetch('/api/tokens/daily', { method: 'POST' })).json();
+            showToast(data.message, data.ok ? 'success' : 'info');
+            if (data.ok) loadTokens();
+        } catch (e) {
+            showToast('خطا', 'error');
+        }
+    }
+
+    function copyReferral() {
+        const botUsername = tokenData.bot_username || '';
+        if (!botUsername) {
+            showToast('ربات توکن تنظیم نشده', 'error');
+            return;
+        }
+        const link = 'https://t.me/' + botUsername + '?start=ref_' + (tokenData.owner_id || '');
+        navigator.clipboard.writeText(link).then(() => {
+            showToast('🔗 لینک رفرال کپی شد!', 'success');
+        }).catch(() => {
+            prompt('لینک رفرال شما:', link);
+        });
+    }
+
+    function buyTokens() {
+        const botUsername = tokenData.bot_username || '';
+        if (!botUsername) {
+            showToast('ربات توکن تنظیم نشده', 'error');
+            return;
+        }
+        window.open('https://t.me/' + botUsername + '?start=buy', '_blank');
+    }
+
+    // ============================================================
+    // ENEMIES
+    // ============================================================
+    async function loadEnemies() {
+        try {
+            const res = await fetch('/api/enemies');
+            if (res.ok) {
+                enemies = await res.json();
+                renderEnemies();
+            }
+        } catch (e) {}
+    }
+
+    function renderEnemies() {
+        const el = document.getElementById('enemyList');
+        const count = document.getElementById('enemyCount');
+        if (count) count.textContent = enemies.length;
+
+        if (!enemies.length) {
+            el.innerHTML = '<div class="list-empty">📭 لیست دشمن خالی است</div>';
+            return;
+        }
+
+        el.innerHTML = enemies.map(e => `
+            <div class="list-item">
+                <div class="info">
+                    ${e.name || e.username || e.user_id}
+                    <span class="id">${e.user_id}</span>
+                </div>
+                <div class="actions">
+                    <button class="btn-sm btn-red" onclick="deleteEnemy(${e.user_id})">حذف</button>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    async function addEnemy() {
+        const uid = document.getElementById('enemyId').value.trim();
+        const name = document.getElementById('enemyName').value.trim();
+        if (!uid) { showToast('آیدی الزامی است', 'error'); return; }
+        try {
+            const data = await (await fetch('/api/enemies', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user_id: parseInt(uid), name })
+            })).json();
+            if (data.ok) {
+                showToast('✅ دشمن اضافه شد', 'success');
+                document.getElementById('enemyId').value = '';
+                document.getElementById('enemyName').value = '';
+                loadEnemies();
+            } else {
+                showToast(data.error || 'خطا', 'error');
+            }
+        } catch (e) {
+            showToast('خطا', 'error');
+        }
+    }
+
+    async function deleteEnemy(uid) {
+        try {
+            await fetch('/api/enemies/' + uid, { method: 'DELETE' });
+            loadEnemies();
+            showToast('🗑️ حذف شد', 'info');
+        } catch (e) {
+            showToast('خطا', 'error');
+        }
+    }
+
+    async function clearEnemies() {
+        if (!confirm('همه دشمن‌ها پاک شوند؟')) return;
+        try {
+            await fetch('/api/enemies/clear', { method: 'POST' });
+            loadEnemies();
+            showToast('🗑️ پاک شد', 'info');
+        } catch (e) {
+            showToast('خطا', 'error');
+        }
+    }
+
+    // ============================================================
+    // FRIENDS
+    // ============================================================
+    async function loadFriends() {
+        try {
+            const res = await fetch('/api/friends');
+            if (res.ok) {
+                friends = await res.json();
+                renderFriends();
+            }
+        } catch (e) {}
+    }
+
+    function renderFriends() {
+        const el = document.getElementById('friendList');
+        const count = document.getElementById('friendCount');
+        if (count) count.textContent = friends.length;
+
+        if (!friends.length) {
+            el.innerHTML = '<div class="list-empty">📭 لیست دوست خالی است</div>';
+            return;
+        }
+
+        el.innerHTML = friends.map(f => `
+            <div class="list-item">
+                <div class="info">
+                    ${f.name || f.username || f.user_id}
+                    <span class="id">${f.user_id}</span>
+                </div>
+                <div class="actions">
+                    <button class="btn-sm btn-red" onclick="deleteFriend(${f.user_id})">حذف</button>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    async function addFriend() {
+        const uid = document.getElementById('friendId').value.trim();
+        const name = document.getElementById('friendName').value.trim();
+        if (!uid) { showToast('آیدی الزامی است', 'error'); return; }
+        try {
+            const data = await (await fetch('/api/friends', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user_id: parseInt(uid), name })
+            })).json();
+            if (data.ok) {
+                showToast('✅ دوست اضافه شد', 'success');
+                document.getElementById('friendId').value = '';
+                document.getElementById('friendName').value = '';
+                loadFriends();
+            } else {
+                showToast(data.error || 'خطا', 'error');
+            }
+        } catch (e) {
+            showToast('خطا', 'error');
+        }
+    }
+
+    async function deleteFriend(uid) {
+        try {
+            await fetch('/api/friends/' + uid, { method: 'DELETE' });
+            loadFriends();
+            showToast('🗑️ حذف شد', 'info');
+        } catch (e) {
+            showToast('خطا', 'error');
+        }
+    }
+
+    async function clearFriends() {
+        if (!confirm('همه دوست‌ها پاک شوند؟')) return;
+        try {
+            await fetch('/api/friends/clear', { method: 'POST' });
+            loadFriends();
+            showToast('🗑️ پاک شد', 'info');
+        } catch (e) {
+            showToast('خطا', 'error');
+        }
+    }
+
+    // ============================================================
+    // SILENT
+    // ============================================================
+    async function addSilentChat() {
+        const id = document.getElementById('silentChatId').value.trim();
+        if (!id) { showToast('آیدی چت را وارد کنید', 'error'); return; }
+        try {
+            await fetch('/api/silent/chat/' + id, { method: 'POST' });
+            showToast('🔇 چت سایلنت شد', 'success');
+            document.getElementById('silentChatId').value = '';
+        } catch (e) {
+            showToast('خطا', 'error');
+        }
+    }
+
+    async function removeSilentChat() {
+        const id = document.getElementById('silentChatId').value.trim();
+        if (!id) { showToast('آیدی چت را وارد کنید', 'error'); return; }
+        try {
+            await fetch('/api/silent/chat/' + id, { method: 'DELETE' });
+            showToast('🔔 سایلنت چت برداشته شد', 'info');
+            document.getElementById('silentChatId').value = '';
+        } catch (e) {
+            showToast('خطا', 'error');
+        }
+    }
+
+    async function addSilentUser() {
+        const id = document.getElementById('silentUserId').value.trim();
+        if (!id) { showToast('آیدی کاربر را وارد کنید', 'error'); return; }
+        try {
+            await fetch('/api/silent/user/' + id, { method: 'POST' });
+            showToast('🔇 کاربر سایلنت شد', 'success');
+            document.getElementById('silentUserId').value = '';
+        } catch (e) {
+            showToast('خطا', 'error');
+        }
+    }
+
+    async function removeSilentUser() {
+        const id = document.getElementById('silentUserId').value.trim();
+        if (!id) { showToast('آیدی کاربر را وارد کنید', 'error'); return; }
+        try {
+            await fetch('/api/silent/user/' + id, { method: 'DELETE' });
+            showToast('🔔 سایلنت کاربر برداشته شد', 'info');
+            document.getElementById('silentUserId').value = '';
+        } catch (e) {
+            showToast('خطا', 'error');
+        }
+    }
+
+    // ============================================================
+    // TOOLS
+    // ============================================================
+    function runTool(type) {
+        if (type === 'translate') {
+            const text = document.getElementById('toolTranslate').value.trim();
+            if (!text) { showToast('متن را وارد کنید', 'error'); return; }
+            showToast('🌐 ترجمه: "' + text + '" — در تلگرام اجرا می‌شود', 'info');
+        } else if (type === 'weather') {
+            const city = document.getElementById('toolWeather').value.trim();
+            if (!city) { showToast('شهر را وارد کنید', 'error'); return; }
+            showToast('⛅ هوا: ' + city + ' — در تلگرام اجرا می‌شود', 'info');
+        } else if (type === 'currency') {
+            const query = document.getElementById('toolCurrency').value.trim();
+            showToast('💰 قیمت ارز' + (query ? ' (' + query + ')' : '') + ' — در تلگرام اجرا می‌شود', 'info');
+        }
+    }
+
+    // ============================================================
+    // SPAM
+    // ============================================================
+    function startSpam() {
+        const count = document.getElementById('spamCount').value || 5;
+        const text = document.getElementById('spamText').value.trim();
+        if (!text) { showToast('متن پیام را وارد کنید', 'error'); return; }
+        showToast('💣 ارسال ' + count + ' پیام اسپم — در تلگرام اجرا می‌شود', 'info');
+    }
+
+    function stopSpam() {
+        showToast('⏹ توقف اسپم — در تلگرام اجرا می‌شود', 'info');
+    }
+
+    // ============================================================
+    // SAVE MEDIA
+    // ============================================================
+    function startSave() {
+        const channel = document.getElementById('saveChannel').value.trim();
+        const count = document.getElementById('saveCount').value || 50;
+        if (!channel) { showToast('یوزرنیم یا لینک کانال را وارد کنید', 'error'); return; }
+        showToast('📥 سیو مدیا از ' + channel + ' (' + count + ' عدد) — در تلگرام اجرا می‌شود', 'info');
+    }
+
+    function stopSave() {
+        showToast('⏹ توقف سیو — در تلگرام اجرا می‌شود', 'info');
+    }
+
+    // ============================================================
+    // SETTINGS
+    // ============================================================
+    async function saveSecretaryInline() {
+        const msg = document.getElementById('secMsgInline').value;
+        try {
+            const data = await (await fetch('/api/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ secretary_message: msg })
+            })).json();
+            if (data.ok) {
+                currentSettings.secretary_message = msg;
+                document.getElementById('secretaryMsg').value = msg;
+                showToast('✅ پیام منشی ذخیره شد', 'success');
+            }
+        } catch (e) {
+            showToast('خطا', 'error');
+        }
+    }
+
+    async function saveReaction() {
+        const emoji = document.getElementById('reactionEmoji').value;
+        try {
+            const data = await (await fetch('/api/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ auto_reaction_emoji: emoji })
+            })).json();
+            if (data.ok) {
+                currentSettings.auto_reaction_emoji = emoji;
+                showToast('✅ ری‌اکشن ذخیره شد', 'success');
+            }
+        } catch (e) {
+            showToast('خطا', 'error');
+        }
+    }
+
+    async function saveAllSettings() {
+        const payload = {
+            secretary_message: document.getElementById('secretaryMsg').value,
+            auto_reaction_emoji: document.getElementById('reactionEmoji').value,
+            selected_font: document.getElementById('fontSelect').value,
+            spam_delay: document.getElementById('spamDelay').value,
+        };
+        try {
+            const data = await (await fetch('/api/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })).json();
+            if (data.ok) {
+                Object.assign(currentSettings, payload);
+                showToast('✅ همه تنظیمات ذخیره شد', 'success');
+            }
+        } catch (e) {
+            showToast('خطا', 'error');
+        }
+    }
+
+    // ============================================================
+    // LOGOUT
+    // ============================================================
+    async function tgLogout() {
+        if (!confirm('از حساب تلگرام خارج شوید؟')) return;
+        try {
+            await fetch('/api/logout', { method: 'POST' });
+            window.location.href = '{{ url_for("tg_login_page") }}';
+        } catch (e) {
+            window.location.href = '{{ url_for("tg_login_page") }}';
+        }
+    }
+
+    async function panelLogout() {
+        if (!confirm('از پنل خارج شوید؟')) return;
+        try {
+            await fetch('/api/panel-logout', { method: 'POST' });
+            window.location.href = '{{ url_for("panel_login_page") }}';
+        } catch (e) {
+            window.location.href = '{{ url_for("panel_login_page") }}';
+        }
+    }
+
+    // ============================================================
+    // INIT
+    // ============================================================
+    document.addEventListener('DOMContentLoaded', function() {
+        loadTokens();
+        updateStatusDot();
+
+        // Update spam delay display
+        const delayInput = document.getElementById('spamDelay');
+        const display = document.getElementById('spamDelayDisplay');
+        if (delayInput && display) {
+            delayInput.addEventListener('input', function() {
+                display.textContent = this.value || 2;
+            });
+        }
+
+        // Sync secretary message fields
+        const secInline = document.getElementById('secMsgInline');
+        const secMsg = document.getElementById('secretaryMsg');
+        if (secInline && secMsg) {
+            secInline.addEventListener('input', function() {
+                secMsg.value = this.value;
+            });
+            secMsg.addEventListener('input', function() {
+                secInline.value = this.value;
+            });
+        }
+
+        // Sync reaction emoji fields
+        const reInline = document.getElementById('reactionEmoji');
+        const reMsg = document.getElementById('reactionEmoji');
+        // They're the same element in this layout
+    });
+
+    // ============================================================
+    // TOAST HELPER (overrides base.html toast)
+    // ============================================================
+    function showToast(message, type) {
+        // Use the toast from base.html if available
+        if (typeof window.showToast === 'function') {
+            window.showToast(message, type);
+            return;
+        }
+        // Fallback
+        const toast = document.createElement('div');
+        toast.className = 'toast toast-' + (type || 'info');
+        toast.textContent = message;
+        document.body.appendChild(toast);
+        setTimeout(() => toast.classList.add('show'), 50);
+        setTimeout(() => {
+            toast.classList.remove('show');
+            setTimeout(() => toast.remove(), 400);
+        }, 3000);
+    }
+</script>
+{% endblock %}

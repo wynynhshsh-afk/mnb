@@ -1,0 +1,50 @@
+services:
+  - type: web
+    name: amel-self55
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    envVars:
+      - key: API_ID
+        sync: false
+      - key: API_HASH
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: BOT_TOKEN
+        sync: false
+      - key: OWNER_TG_ID
+        value: "8296865861"
+      - key: OWNER_USERNAME
+        value: "amele55"
+      - key: OWNER_PHONE
+        sync: false
+      - key: SITE_URL
+        sync: false
+      - key: PORT
+        value: "10000"
+      # ─── Supabase ──────────────────────────────────────────────────────────
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      # ─── Upstash Redis ──────────────────────────────────────────────────────
+      - key: UPSTASH_REDIS_URL
+        sync: false
+      # ─── DeepSeek (دستیار هوش مصنوعی) ────────────────────────────────────────
+      - key: DEEPSEEK_API_KEY
+        sync: false
+        services:
+  - type: web
+    name: amel-self55
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    envVars:
+      # ... متغیرهای قبلی ...
+      # ─── اضافه کردن Redis ──────────────────────────────────────────────────
+      - key: UPSTASH_REDIS_URL
+        sync: false
+      # ─── Health Check ──────────────────────────────────────────────────────
+      - key: HEALTH_CHECK_PATH
+        value: "/health"

@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+
+{% block title %}ورود به پنل — NexoSelf{% endblock %}
+
+{% block content %}
+<section style="min-height:70vh;display:flex;align-items:center;justify-content:center;padding:40px 0;">
+    <div class="auth-card" style="max-width:420px;width:100%;">
+        <div style="text-align:center;margin-bottom:32px;">
+            <img src="{{ url_for('static', filename='logo.png') }}" alt="NexoSelf" height="60" style="margin-bottom:12px;border-radius:14px;">
+            <h1 style="font-size:28px;font-weight:800;">🔐 ورود</h1>
+            <p style="color:var(--text2);font-size:14px;">به پنل مدیریت NexoSelf خوش آمدید</p>
+        </div>
+
+        {% if error %}
+        <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.2);color:#fca5a5;padding:12px 16px;border-radius:var(--radius-sm);text-align:center;margin-bottom:16px;">
+            {{ error }}
+        </div>
+        {% endif %}
+
+        <form method="POST" action="{{ url_for('panel_login_page') }}" style="display:flex;flex-direction:column;gap:16px;">
+            <div>
+                <label style="display:block;font-size:13px;color:var(--text2);margin-bottom:4px;">👤 یوزرنیم</label>
+                <input type="text" name="username" class="auth-input" placeholder="یوزرنیم خود را وارد کنید" required autocomplete="username" value="{{ request.form.username or '' }}">
+            </div>
+
+            <div>
+                <label style="display:block;font-size:13px;color:var(--text2);margin-bottom:4px;">🔒 رمز عبور</label>
+                <input type="password" name="password" class="auth-input" placeholder="رمز عبور خود را وارد کنید" required autocomplete="current-password">
+            </div>
+
+            <button type="submit" class="btn-auth" style="width:100%;justify-content:center;font-size:16px;padding:14px;">
+                🚀 ورود به پنل
+            </button>
+        </form>
+
+        <div style="text-align:center;margin-top:20px;padding-top:20px;border-top:1px solid var(--border);font-size:14px;color:var(--text2);">
+            حساب ندارید؟ <a href="{{ url_for('register_page') }}" style="color:var(--accent2);font-weight:600;">ثبت‌نام کنید</a>
+        </div>
+
+        <div style="text-align:center;margin-top:12px;font-size:12px;color:var(--text3);">
+            <span>✨ ورود با تلگرام نیز پشتیبانی می‌شود</span>
+        </div>
+    </div>
+</section>
+
+<style>
+    .auth-card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 32px 28px;
+        box-shadow: var(--shadow);
+        transition: var(--transition);
+    }
+    .auth-card:hover {
+        border-color: var(--border2);
+    }
+
+    .auth-input {
+        width: 100%;
+        padding: 12px 16px;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid var(--border2);
+        border-radius: var(--radius-sm);
+        color: var(--text);
+        font-family: inherit;
+        font-size: 14px;
+        outline: none;
+        transition: var(--transition);
+        direction: rtl;
+    }
+    .auth-input:focus {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+    .auth-input::placeholder {
+        color: var(--text3);
+    }
+
+    .btn-auth {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        padding: 14px 34px;
+        background: linear-gradient(135deg, var(--accent), #a855f7);
+        border: none;
+        border-radius: var(--radius-sm);
+        color: #fff;
+        font-size: 16px;
+        font-weight: 700;
+        transition: var(--transition);
+        box-shadow: 0 4px 24px var(--accent-glow);
+        cursor: pointer;
+        font-family: inherit;
+    }
+    .btn-auth:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 40px var(--accent-glow);
+        background: linear-gradient(135deg, #7c5fff, #b875ff);
+    }
+    .btn-auth:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        transform: none !important;
+    }
+
+    @media (max-width: 480px) {
+        .auth-card {
+            padding: 24px 16px;
+        }
+        .auth-card h1 {
+            font-size: 24px;
+        }
+        .auth-input {
+            font-size: 15px;
+            padding: 10px 14px;
+        }
+        .btn-auth {
+            font-size: 15px;
+            padding: 12px 20px;
+        }
+    }
+</style>
+
+<script>
+    // ============================================================
+    // Auto-focus on username field
+    // ============================================================
+    document.addEventListener('DOMContentLoaded', function() {
+        const usernameField = document.querySelector('input[name="username"]');
+        if (usernameField && !usernameField.value) {
+            setTimeout(() => usernameField.focus(), 100);
+        }
+    });
+
+    // ============================================================
+    // Enter key support
+    // ============================================================
+    document.querySelectorAll('.auth-input').forEach(input => {
+        input.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                const form = this.closest('form');
+                if (form) form.submit();
+            }
+        });
+    });
+
+    // ============================================================
+    // Prevent double submission
+    // ============================================================
+    document.querySelector('form')?.addEventListener('submit', function() {
+        const btn = this.querySelector('.btn-auth');
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = '⏳ در حال ورود...';
+        }
+    });
+</script>
+{% endblock %}

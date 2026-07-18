@@ -1,0 +1,342 @@
+{% extends "base.html" %}
+
+{% block title %}ثبت‌نام — NexoSelf{% endblock %}
+
+{% block content %}
+<section style="min-height:70vh;display:flex;align-items:center;justify-content:center;padding:40px 0;">
+    <div class="auth-card" style="max-width:420px;width:100%;">
+        <div style="text-align:center;margin-bottom:32px;">
+            <img src="{{ url_for('static', filename='logo.png') }}" alt="NexoSelf" height="60" style="margin-bottom:12px;border-radius:14px;">
+            <h1 style="font-size:28px;font-weight:800;">✨ ثبت‌نام</h1>
+            <p style="color:var(--text2);font-size:14px;">ایجاد حساب کاربری جدید در NexoSelf</p>
+        </div>
+
+        <!-- Requirements Box -->
+        <div style="background:rgba(108,79,255,0.06);border:1px solid rgba(108,79,255,0.12);border-radius:var(--radius-sm);padding:14px 16px;margin-bottom:20px;font-size:13px;color:var(--text2);">
+            <strong style="color:var(--purple);display:block;margin-bottom:6px;">📋 شرایط ثبت‌نام:</strong>
+            <ul style="margin:0;padding:0;list-style:none;">
+                <li style="padding:2px 0;">✓ یوزرنیم حداقل ۳ کاراکتر</li>
+                <li style="padding:2px 0;">✓ رمز عبور حداقل ۶ کاراکتر</li>
+                <li style="padding:2px 0;">✓ استفاده از حروف و اعداد مجاز است</li>
+            </ul>
+        </div>
+
+        {% if error %}
+        <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.2);color:#fca5a5;padding:12px 16px;border-radius:var(--radius-sm);text-align:center;margin-bottom:16px;">
+            ❌ {{ error }}
+        </div>
+        {% endif %}
+
+        {% if success %}
+        <div style="background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.2);color:#86efac;padding:12px 16px;border-radius:var(--radius-sm);text-align:center;margin-bottom:16px;">
+            ✅ {{ success }}
+        </div>
+        {% endif %}
+
+        <form method="POST" action="{{ url_for('register_page') }}" style="display:flex;flex-direction:column;gap:14px;" id="registerForm">
+            <div>
+                <label style="display:block;font-size:13px;color:var(--text2);margin-bottom:4px;">👤 یوزرنیم</label>
+                <input type="text" name="username" class="auth-input" placeholder="مثال: ali_rezaei" required minlength="3" autocomplete="username" value="{{ request.form.username or '' }}" pattern="[a-zA-Z0-9_]+" title="فقط حروف انگلیسی، اعداد و زیرخط مجاز است">
+                <div style="font-size:11px;color:var(--text3);margin-top:4px;">فقط حروف انگلیسی، اعداد و زیرخط (_)</div>
+            </div>
+
+            <div>
+                <label style="display:block;font-size:13px;color:var(--text2);margin-bottom:4px;">🔒 رمز عبور</label>
+                <input type="password" name="password" class="auth-input" placeholder="حداقل ۶ کاراکتر" required minlength="6" autocomplete="new-password" id="regPassword">
+                <div style="font-size:11px;color:var(--text3);margin-top:4px;">حداقل ۶ کاراکتر</div>
+            </div>
+
+            <div>
+                <label style="display:block;font-size:13px;color:var(--text2);margin-bottom:4px;">🔒 تکرار رمز عبور</label>
+                <input type="password" name="confirm_password" class="auth-input" placeholder="تکرار رمز عبور" required minlength="6" autocomplete="new-password" id="regConfirmPassword">
+            </div>
+
+            <button type="submit" class="btn-auth" style="width:100%;justify-content:center;font-size:16px;padding:14px;" id="registerBtn">
+                🎯 ایجاد حساب کاربری
+            </button>
+        </form>
+
+        <div style="text-align:center;margin-top:20px;padding-top:20px;border-top:1px solid var(--border);font-size:14px;color:var(--text2);">
+            قبلاً ثبت‌نام کرده‌اید؟ <a href="{{ url_for('panel_login_page') }}" style="color:var(--accent2);font-weight:600;">وارد شوید</a>
+        </div>
+
+        <div style="text-align:center;margin-top:12px;font-size:12px;color:var(--text3);">
+            <span>🚀 پس از ثبت‌نام، وارد پنل مدیریت می‌شوید</span>
+        </div>
+    </div>
+</section>
+
+<style>
+    .auth-card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 32px 28px;
+        box-shadow: var(--shadow);
+        transition: var(--transition);
+    }
+    .auth-card:hover {
+        border-color: var(--border2);
+    }
+
+    .auth-input {
+        width: 100%;
+        padding: 12px 16px;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid var(--border2);
+        border-radius: var(--radius-sm);
+        color: var(--text);
+        font-family: inherit;
+        font-size: 14px;
+        outline: none;
+        transition: var(--transition);
+        direction: rtl;
+    }
+    .auth-input:focus {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+    .auth-input::placeholder {
+        color: var(--text3);
+    }
+    .auth-input.error {
+        border-color: var(--red);
+        box-shadow: 0 0 0 3px rgba(239,68,68,0.2);
+    }
+    .auth-input.success {
+        border-color: var(--green);
+        box-shadow: 0 0 0 3px rgba(34,197,94,0.2);
+    }
+
+    .btn-auth {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        padding: 14px 34px;
+        background: linear-gradient(135deg, var(--accent), #a855f7);
+        border: none;
+        border-radius: var(--radius-sm);
+        color: #fff;
+        font-size: 16px;
+        font-weight: 700;
+        transition: var(--transition);
+        box-shadow: 0 4px 24px var(--accent-glow);
+        cursor: pointer;
+        font-family: inherit;
+    }
+    .btn-auth:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 40px var(--accent-glow);
+        background: linear-gradient(135deg, #7c5fff, #b875ff);
+    }
+    .btn-auth:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        transform: none !important;
+    }
+
+    .password-strength {
+        height: 4px;
+        border-radius: 4px;
+        margin-top: 6px;
+        background: var(--border2);
+        overflow: hidden;
+        transition: var(--transition);
+    }
+    .password-strength .bar {
+        height: 100%;
+        width: 0%;
+        border-radius: 4px;
+        transition: width 0.4s ease;
+    }
+    .password-strength .bar.weak {
+        width: 33%;
+        background: var(--red);
+    }
+    .password-strength .bar.medium {
+        width: 66%;
+        background: var(--gold);
+    }
+    .password-strength .bar.strong {
+        width: 100%;
+        background: var(--green);
+    }
+
+    .password-hint {
+        font-size: 11px;
+        margin-top: 4px;
+        transition: var(--transition);
+    }
+    .password-hint.weak {
+        color: #fca5a5;
+    }
+    .password-hint.medium {
+        color: #fcd34d;
+    }
+    .password-hint.strong {
+        color: #86efac;
+    }
+
+    @media (max-width: 480px) {
+        .auth-card {
+            padding: 24px 16px;
+        }
+        .auth-card h1 {
+            font-size: 24px;
+        }
+        .auth-input {
+            font-size: 15px;
+            padding: 10px 14px;
+        }
+        .btn-auth {
+            font-size: 15px;
+            padding: 12px 20px;
+        }
+    }
+</style>
+
+<script>
+    // ============================================================
+    // Password strength indicator
+    // ============================================================
+    function checkPasswordStrength(password) {
+        let score = 0;
+        if (password.length >= 6) score++;
+        if (password.length >= 10) score++;
+        if (/[a-z]/.test(password) && /[A-Z]/.test(password)) score++;
+        if (/\d/.test(password)) score++;
+        if (/[^a-zA-Z0-9]/.test(password)) score++;
+
+        if (score <= 2) return { level: 'weak', label: 'ضعیف' };
+        if (score <= 4) return { level: 'medium', label: 'متوسط' };
+        return { level: 'strong', label: 'قوی' };
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        const passwordInput = document.getElementById('regPassword');
+        const confirmInput = document.getElementById('regConfirmPassword');
+
+        // Create strength indicator
+        const strengthContainer = document.createElement('div');
+        strengthContainer.className = 'password-strength';
+        const strengthBar = document.createElement('div');
+        strengthBar.className = 'bar';
+        strengthContainer.appendChild(strengthBar);
+        const hint = document.createElement('div');
+        hint.className = 'password-hint';
+        hint.textContent = '';
+
+        // Insert after password input
+        passwordInput.parentNode.appendChild(strengthContainer);
+        passwordInput.parentNode.appendChild(hint);
+
+        // Password strength check
+        passwordInput.addEventListener('input', function() {
+            const val = this.value;
+            if (val.length === 0) {
+                strengthBar.className = 'bar';
+                strengthBar.style.width = '0%';
+                hint.textContent = '';
+                hint.className = 'password-hint';
+                return;
+            }
+
+            const result = checkPasswordStrength(val);
+            strengthBar.className = 'bar ' + result.level;
+            strengthBar.style.width = result.level === 'weak' ? '33%' : result.level === 'medium' ? '66%' : '100%';
+            hint.textContent = 'قدرت رمز: ' + result.label;
+            hint.className = 'password-hint ' + result.level;
+
+            // Also check confirm match
+            if (confirmInput.value && confirmInput.value !== val) {
+                confirmInput.classList.add('error');
+                confirmInput.classList.remove('success');
+            } else if (confirmInput.value && confirmInput.value === val) {
+                confirmInput.classList.remove('error');
+                confirmInput.classList.add('success');
+            }
+        });
+
+        // Confirm password check
+        confirmInput.addEventListener('input', function() {
+            const pass = passwordInput.value;
+            const confirm = this.value;
+
+            if (!confirm) {
+                this.classList.remove('error', 'success');
+                return;
+            }
+
+            if (confirm === pass) {
+                this.classList.remove('error');
+                this.classList.add('success');
+            } else {
+                this.classList.remove('success');
+                this.classList.add('error');
+            }
+        });
+
+        // ============================================================
+        // Form validation
+        // ============================================================
+        document.getElementById('registerForm').addEventListener('submit', function(e) {
+            const pass = document.getElementById('regPassword');
+            const confirm = document.getElementById('regConfirmPassword');
+            const btn = document.getElementById('registerBtn');
+
+            if (pass.value !== confirm.value) {
+                e.preventDefault();
+                confirm.classList.add('error');
+                showToast('❌ رمز عبور و تکرار آن مطابقت ندارند!', 'error');
+                return false;
+            }
+
+            if (pass.value.length < 6) {
+                e.preventDefault();
+                pass.classList.add('error');
+                showToast('❌ رمز عبور باید حداقل ۶ کاراکتر باشد!', 'error');
+                return false;
+            }
+
+            // Disable button to prevent double submission
+            btn.disabled = true;
+            btn.textContent = '⏳ در حال ثبت‌نام...';
+        });
+
+        // ============================================================
+        // Auto-focus
+        // ============================================================
+        const usernameField = document.querySelector('input[name="username"]');
+        if (usernameField && !usernameField.value) {
+            setTimeout(() => usernameField.focus(), 100);
+        }
+
+        // ============================================================
+        // Enter key support
+        // ============================================================
+        document.querySelectorAll('.auth-input').forEach(input => {
+            input.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter') {
+                    const form = this.closest('form');
+                    if (form) form.submit();
+                }
+            });
+        });
+    });
+
+    // ============================================================
+    // Toast helper (fallback)
+    // ============================================================
+    function showToast(message, type) {
+        const toast = document.createElement('div');
+        toast.className = 'toast toast-' + (type || 'info');
+        toast.textContent = message;
+        document.body.appendChild(toast);
+        setTimeout(() => toast.classList.add('show'), 50);
+        setTimeout(() => {
+            toast.classList.remove('show');
+            setTimeout(() => toast.remove(), 400);
+        }, 3500);
+    }
+</script>
+{% endblock %}
