@@ -2,16 +2,20 @@
 ╔══════════════════════════════════════════════════╗
 ║      ربات فورواردر چندمسیره (نامحدود) 🤖         ║
 ║  python-telegram-bot 22.7+  |  Python 3.14+      ║
-║  حالت اجرا: Webhook (مخصوص Render Web Service)   ║
+║  حالت اجرا: Polling (مخصوص Render Background Worker) ║
 ╚══════════════════════════════════════════════════╝
 
 متغیرهای محیطی اجباری (در Render تنظیم کنید):
   BOT_TOKEN     ← توکن از @BotFather
   ADMINS        ← آیدی عددی مالکان اصلی ربات (با کاما جدا کنید اگر چند نفرند)
-  WEBHOOK_URL   ← آدرس سرویس Render شما (مثل https://my-bot.onrender.com)
   SUPABASE_URL  ← از Project Settings → General → Project URL
   SUPABASE_KEY  ← از Project Settings → API Keys → Secret keys
                   (کلیدی که با sb_secret_ شروع می‌شود، نه publishable/anon)
+
+نکته مهم: این نسخه از حالت webhook به polling تغییر کرده. یعنی این سرویس
+باید به‌عنوان «Background Worker» روی Render دیپلوی بشه، نه Web Service،
+چون دیگه پورتی باز نمی‌کنه و منتظر ریکوئست HTTP نمی‌مونه (و در نتیجه هیچ‌وقت
+به‌خاطر بی‌فعالیتیِ HTTP نمی‌خوابه).
 
 نکته: افرادی که در ADMINS قرار می‌گیرند «مالک» ربات هستند و همیشه دسترسی کامل
 دارند. مالک‌ها می‌توانند از داخل ربات ادمین‌های دیگر اضافه کنند و برای هرکدام
@@ -64,11 +68,6 @@ OWNERS: list[int] = [
     int(part) for part in _owners_raw.split(",") if part.strip().lstrip("-").isdigit()
 ]
 
-WEBHOOK_URL: str = os.environ.get("WEBHOOK_URL", "").strip().rstrip("/")
-
-# Render پورت واقعی را از طریق متغیر PORT تزریق می‌کند.
-PORT: int = int(os.environ.get("PORT", "8443"))
-
 SUPABASE_URL: str = os.environ.get("SUPABASE_URL", "").strip()
 SUPABASE_KEY: str = os.environ.get("SUPABASE_KEY", "").strip()
 
@@ -77,9 +76,6 @@ if not BOT_TOKEN:
     sys.exit(1)
 if not OWNERS:
     log.critical("متغیر محیطی ADMINS تنظیم نشده یا نامعتبر است.")
-    sys.exit(1)
-if not WEBHOOK_URL:
-    log.critical("متغیر محیطی WEBHOOK_URL تنظیم نشده است.")
     sys.exit(1)
 if not SUPABASE_URL or not SUPABASE_KEY:
     log.critical(
@@ -984,12 +980,12 @@ async def do_forward(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             log.error("❌ [rule #%s] Forward failed msg#%s: %s", r.id, msg.message_id, e)
 
 # ════════════════════════════════════════════════
-#  اجرا (Webhook - مخصوص Render Web Service)
+#  اجرا (Polling - مخصوص Render Background Worker)
 # ════════════════════════════════════════════════
 
 def main() -> None:
     init_db()
-    log.info("🚀 Bot starting (Python 3.14 | PTB 22.7+ | Webhook mode)...")
+    log.info("🚀 Bot starting (Python 3.14 | PTB 22.7+ | Polling mode)...")
 
     app = Application.builder().token(BOT_TOKEN).build()
 
@@ -1050,15 +1046,8 @@ def main() -> None:
     app.add_handler(conv, group=0)
     app.add_handler(MessageHandler(fwd_filter, do_forward), group=1)
 
-    webhook_path = BOT_TOKEN
-    full_webhook_url = f"{WEBHOOK_URL}/{webhook_path}"
-
-    log.info("✅ Bot is running (webhook on port %s)...", PORT)
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        url_path=webhook_path,
-        webhook_url=full_webhook_url,
+    log.info("✅ Bot is running (long polling)...")
+    app.run_polling(
         allowed_updates=Update.ALL_TYPES,
         drop_pending_updates=True,
     )
